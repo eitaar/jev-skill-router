@@ -43,7 +43,7 @@ export interface ClassificationResult {
   candidateCount: number;
   evaluatedCount: number;
   invalidAnswers: number;
-  usage: { inputTokens: number; outputTokens: number };
+  usage: { inputTokens?: number; outputTokens?: number };
   requests: number;
   latencyMs: number;
   errorCategory?: JevErrorCategory;
@@ -91,8 +91,8 @@ function validProbability(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
 }
 
-function validTokenCount(value: unknown): number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+function validTokenCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
 function sortScores(scores: SkillProbability[]): SkillProbability[] {
@@ -112,6 +112,9 @@ export async function classifySkills(input: ClassifySkillsInput): Promise<Classi
   let invalidAnswers = 0;
   let inputTokens = 0;
   let outputTokens = 0;
+  let inputUsageAvailable = true;
+  let outputUsageAvailable = true;
+  let completedRequests = 0;
   let requests = 0;
   let failure: JevErrorCategory | undefined;
 
@@ -125,7 +128,10 @@ export async function classifySkills(input: ClassifySkillsInput): Promise<Classi
       candidateCount: candidates.length,
       evaluatedCount,
       invalidAnswers,
-      usage: { inputTokens, outputTokens },
+      usage: {
+        ...(completedRequests > 0 && inputUsageAvailable ? { inputTokens } : {}),
+        ...(completedRequests > 0 && outputUsageAvailable ? { outputTokens } : {})
+      },
       requests,
       latencyMs: Math.max(0, performance.now() - started),
       ...(failure === undefined ? {} : { errorCategory: failure })
@@ -155,8 +161,13 @@ export async function classifySkills(input: ClassifySkillsInput): Promise<Classi
     const responseRecord = isRecord(response) ? response : {};
     const answers = isRecord(responseRecord.answers) ? responseRecord.answers : {};
     const usage = isRecord(responseRecord.usage) ? responseRecord.usage : {};
-    inputTokens += validTokenCount(usage.input_tokens);
-    outputTokens += validTokenCount(usage.output_tokens);
+    completedRequests += 1;
+    const requestInputTokens = validTokenCount(usage.input_tokens);
+    const requestOutputTokens = validTokenCount(usage.output_tokens);
+    if (requestInputTokens === undefined) inputUsageAvailable = false;
+    else inputTokens += requestInputTokens;
+    if (requestOutputTokens === undefined) outputUsageAvailable = false;
+    else outputTokens += requestOutputTokens;
     for (const candidate of batch) {
       const answer = Object.hasOwn(answers, candidate.key) ? answers[candidate.key] : undefined;
       const probability = isRecord(answer) ? answer.noul : undefined;

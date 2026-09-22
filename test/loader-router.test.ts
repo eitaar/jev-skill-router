@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Usage } from "@earendil-works/pi-ai";
-import type { ClassificationResult, SkillProbability } from "../src/jev.js";
+import { classifySkills, type ClassificationResult, type SkillProbability } from "../src/jev.js";
 import { loadSkills } from "../src/loader.js";
 import { createRouter } from "../src/router.js";
 import type { SkillRecord } from "../src/registry.js";
-import { makeAutomaticRouteInput, makeOnDemandRouteInput, makeSkillRecords } from "./helpers.js";
+import { fakeJev, makeAutomaticRouteInput, makeOnDemandRouteInput, makeSkillRecords } from "./helpers.js";
 
 function classification(
   skills: readonly SkillRecord[],
@@ -261,6 +261,57 @@ test("loader deduplicates repeated selected skills", async () => {
   assert.equal(reads, 1);
   assert.deepEqual(result.suppliedSkills, ["repeated-skill"]);
   assert.equal(result.content.match(/<skill name="repeated-skill"/g)?.length, 1);
+});
+
+test("metrics omit Jev estimates when the provider omits token counts", async () => {
+  const jev = fakeJev(({ questions }) => ({
+    answers: Object.fromEntries(Object.keys(questions).map(key => [key, { noul: 0.9 }])),
+    model: "jev-latest"
+  }));
+  const skill = makeSkillRecords(["unmetered-skill"])[0]!;
+  const router = createRouter({
+    classifier: input => classifySkills({
+      client: jev,
+      task: input.task,
+      skills: input.skills,
+      threshold: input.config.threshold,
+      topK: input.config.topK,
+      model: input.config.jevModel,
+      timeoutMs: input.config.jevTimeoutMs,
+      chunkSize: input.config.jevChunkSize,
+      ...(input.signal === undefined ? {} : { signal: input.signal })
+    }),
+    interpreter: interpreted,
+    readFile: async () => "body"
+  });
+  const result = await router.routeOnDemand(makeOnDemandRouteInput({
+    registry: [skill],
+    config: { ...makeOnDemandRouteInput().config, jevPricing: { inputPerMillion: 2, outputPerMillion: 10 } }
+  }));
+  assert.deepEqual(result.classification?.usage, {});
+  assert.equal(router.metrics.snapshot().jevCost, undefined);
+  assert.deepEqual(router.metrics.snapshot().jevTokens, {});
+});
+
+test("session Jev estimates are omitted if any priced route lacks token counts", async () => {
+  const skill = makeSkillRecords(["incomplete-cost-skill"])[0]!;
+  const pricing = { inputPerMillion: 2, outputPerMillion: 10 };
+  let routeCount = 0;
+  const router = createRouter({
+    classifier: async input => classification(input.skills, [], {
+      usage: routeCount++ === 0 ? { inputTokens: 100, outputTokens: 20 } : {}
+    }),
+    interpreter: interpreted,
+    readFile: async () => "body"
+  });
+  const input = () => makeOnDemandRouteInput({
+    registry: [skill],
+    config: { ...makeOnDemandRouteInput().config, jevPricing: pricing }
+  });
+  await router.routeOnDemand(input());
+  assert.deepEqual(router.metrics.snapshot().jevCost, { value: 0.0004, basis: "estimated" });
+  await router.routeOnDemand(input());
+  assert.equal(router.metrics.snapshot().jevCost, undefined);
 });
 
 test("loader stops before the combined size limit and reports later skills", async () => {

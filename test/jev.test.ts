@@ -163,3 +163,12 @@ test("an empty candidate set skips the provider", async () => {
   assert.equal(result.coverage, "complete");
   assert.equal(result.evaluatedCount, 0);
 });
+
+test("does not invent zero Jev token counts when usage is missing", async () => {
+  const jev = fakeJev(({ questions }) => ({
+    answers: Object.fromEntries(Object.keys(questions).map(key => [key, { noul: 0.9 }])),
+    model: "jev-latest"
+  }));
+  const result = await classify(jev, ["a"]);
+  assert.deepEqual(result.usage, {});
+});

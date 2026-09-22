@@ -58,3 +58,44 @@ test("copies provider usage unchanged as measured Pi usage", async () => {
   const result = await interpretTask({ registry, modelRef: "openai-codex/gpt-6-luna", context: "summarize", timeoutMs: 1000 });
   assert.deepEqual(result.usage, usage);
 });
+
+test("aggregates measured usage across malformed-output repair attempts", async () => {
+  const firstUsage = {
+    input: 2,
+    output: 3,
+    cacheRead: 1,
+    cacheWrite: 1,
+    reasoning: 1,
+    totalTokens: 5,
+    cost: { input: 0.01, output: 0.02, cacheRead: 0.003, cacheWrite: 0.004, total: 0.037 }
+  };
+  const secondUsage = {
+    input: 5,
+    output: 6,
+    cacheRead: 2,
+    cacheWrite: 0,
+    reasoning: 3,
+    totalTokens: 11,
+    cost: { input: 0.05, output: 0.06, cacheRead: 0.002, cacheWrite: 0, total: 0.112 }
+  };
+  const registry = fakeInterpreterRegistry([
+    fakeAssistant("not json", { usage: firstUsage }),
+    fakeAssistant('{"task":"Fix the layout"}', { usage: secondUsage })
+  ]);
+  const result = await interpretTask({ registry, modelRef: "openai-codex/gpt-6-luna", context: "fix the layout", timeoutMs: 1000 });
+  assert.equal(result.attempts, 2);
+  assert.ok(result.usage);
+  assert.deepEqual({
+    input: result.usage.input,
+    output: result.usage.output,
+    cacheRead: result.usage.cacheRead,
+    cacheWrite: result.usage.cacheWrite,
+    reasoning: result.usage.reasoning,
+    totalTokens: result.usage.totalTokens
+  }, { input: 7, output: 9, cacheRead: 3, cacheWrite: 1, reasoning: 4, totalTokens: 16 });
+  assert.ok(Math.abs(result.usage.cost.input - 0.06) < 1e-12);
+  assert.ok(Math.abs(result.usage.cost.output - 0.08) < 1e-12);
+  assert.ok(Math.abs(result.usage.cost.cacheRead - 0.005) < 1e-12);
+  assert.ok(Math.abs(result.usage.cost.cacheWrite - 0.004) < 1e-12);
+  assert.ok(Math.abs(result.usage.cost.total - 0.149) < 1e-12);
+});

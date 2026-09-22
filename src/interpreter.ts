@@ -71,6 +71,28 @@ function makePromptContext(content: string): Context {
   };
 }
 
+function addUsage(total: Usage | undefined, next: Usage | undefined): Usage | undefined {
+  if (!next) return total;
+  if (!total) return { ...next, cost: { ...next.cost } };
+  return {
+    input: total.input + next.input,
+    output: total.output + next.output,
+    cacheRead: total.cacheRead + next.cacheRead,
+    cacheWrite: total.cacheWrite + next.cacheWrite,
+    ...(total.reasoning === undefined && next.reasoning === undefined
+      ? {}
+      : { reasoning: (total.reasoning ?? 0) + (next.reasoning ?? 0) }),
+    totalTokens: total.totalTokens + next.totalTokens,
+    cost: {
+      input: total.cost.input + next.cost.input,
+      output: total.cost.output + next.cost.output,
+      cacheRead: total.cost.cacheRead + next.cost.cacheRead,
+      cacheWrite: total.cost.cacheWrite + next.cost.cacheWrite,
+      total: total.cost.total + next.cost.total
+    }
+  };
+}
+
 export async function interpretTask(input: InterpretTaskInput): Promise<InterpretationResult> {
   const startedAt = Date.now();
   let attempts = 0;
@@ -141,7 +163,7 @@ export async function interpretTask(input: InterpretTaskInput): Promise<Interpre
         return fallback("provider");
       }
 
-      usage = message.usage;
+      usage = addUsage(usage, message.usage);
       if (message.stopReason === "error") return fallback("provider");
       if (message.stopReason === "aborted") return fallback(timeoutExpired ? "timeout" : "cancelled");
 
@@ -153,7 +175,7 @@ export async function interpretTask(input: InterpretTaskInput): Promise<Interpre
           fallbackUsed: false,
           attempts,
           latencyMs: Date.now() - startedAt,
-          usage
+          ...(usage === undefined ? {} : { usage })
         };
       }
       if (attempt === 1) return fallback("malformed");

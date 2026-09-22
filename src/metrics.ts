@@ -33,7 +33,7 @@ export interface MetricsSnapshot {
   interpreterLatencyMs: number;
   jevRequests: number;
   jevChunks: number;
-  jevTokens: { input: number; output: number };
+  jevTokens: { input?: number; output?: number };
   jevLatencyMs: number;
   candidateCount: number;
   evaluatedCount: number;
@@ -64,6 +64,10 @@ export function createSessionMetrics() {
     jevRequests: 0,
     jevChunks: 0,
     jevTokens: { input: 0, output: 0 },
+    jevInputTokensAvailable: true,
+    jevOutputTokensAvailable: true,
+    jevInputTokensObserved: false,
+    jevOutputTokensObserved: false,
     jevLatencyMs: 0,
     candidateCount: 0,
     evaluatedCount: 0,
@@ -74,7 +78,8 @@ export function createSessionMetrics() {
     selectedNames: new Set<string>(),
     errorCategories: new Map<string, number>(),
     interpreterCost: undefined as CostMetric | undefined,
-    jevCost: undefined as CostMetric | undefined
+    jevCost: undefined as CostMetric | undefined,
+    jevCostUnavailable: false
   };
 
   const reset = (): void => {
@@ -87,6 +92,10 @@ export function createSessionMetrics() {
     state.jevRequests = 0;
     state.jevChunks = 0;
     Object.assign(state.jevTokens, { input: 0, output: 0 });
+    state.jevInputTokensAvailable = true;
+    state.jevOutputTokensAvailable = true;
+    state.jevInputTokensObserved = false;
+    state.jevOutputTokensObserved = false;
     state.jevLatencyMs = 0;
     state.candidateCount = 0;
     state.evaluatedCount = 0;
@@ -98,6 +107,7 @@ export function createSessionMetrics() {
     state.errorCategories.clear();
     state.interpreterCost = undefined;
     state.jevCost = undefined;
+    state.jevCostUnavailable = false;
   };
 
   const recordRoute = (input: RouteMetricInput, pricing?: RouterConfig["jevPricing"]): void => {
@@ -138,11 +148,23 @@ export function createSessionMetrics() {
       state.jevRequests += tokenCount(classification.requests);
       state.jevChunks += classification.requests > 1 ? tokenCount(classification.requests - 1) : 0;
       state.jevLatencyMs += nonnegative(classification.latencyMs);
-      state.jevTokens.input += tokenCount(classification.usage.inputTokens);
-      state.jevTokens.output += tokenCount(classification.usage.outputTokens);
-      if (pricing) {
-        const cost = classification.usage.inputTokens * pricing.inputPerMillion / 1_000_000
-          + classification.usage.outputTokens * pricing.outputPerMillion / 1_000_000;
+      const { inputTokens, outputTokens } = classification.usage;
+      if (inputTokens === undefined) state.jevInputTokensAvailable = false;
+      else {
+        state.jevInputTokensObserved = true;
+        state.jevTokens.input += tokenCount(inputTokens);
+      }
+      if (outputTokens === undefined) state.jevOutputTokensAvailable = false;
+      else {
+        state.jevOutputTokensObserved = true;
+        state.jevTokens.output += tokenCount(outputTokens);
+      }
+      if (pricing && (inputTokens === undefined || outputTokens === undefined)) {
+        state.jevCostUnavailable = true;
+        state.jevCost = undefined;
+      } else if (pricing && !state.jevCostUnavailable) {
+        const cost = inputTokens! * pricing.inputPerMillion / 1_000_000
+          + outputTokens! * pricing.outputPerMillion / 1_000_000;
         if (Number.isFinite(cost) && cost >= 0) {
           state.jevCost = { value: (state.jevCost?.value ?? 0) + cost, basis: "estimated" };
         }
@@ -157,7 +179,10 @@ export function createSessionMetrics() {
     interpreterLatencyMs: state.interpreterLatencyMs,
     jevRequests: state.jevRequests,
     jevChunks: state.jevChunks,
-    jevTokens: { ...state.jevTokens },
+    jevTokens: {
+      ...(state.jevInputTokensAvailable && state.jevInputTokensObserved ? { input: state.jevTokens.input } : {}),
+      ...(state.jevOutputTokensAvailable && state.jevOutputTokensObserved ? { output: state.jevTokens.output } : {})
+    },
     jevLatencyMs: state.jevLatencyMs,
     candidateCount: state.candidateCount,
     evaluatedCount: state.evaluatedCount,
@@ -179,7 +204,7 @@ export function createSessionMetrics() {
       .map(cost => `${cost.value} ${cost.basis}`);
     return [
       `Routes: ${routeCounts}`,
-      `Jev: ${current.jevRequests} requests, ${current.jevTokens.input}/${current.jevTokens.output} tokens, ${current.evaluatedCount}/${current.candidateCount} evaluated`,
+      `Jev: ${current.jevRequests} requests, ${current.jevTokens.input ?? "unavailable"}/${current.jevTokens.output ?? "unavailable"} tokens, ${current.evaluatedCount}/${current.candidateCount} evaluated`,
       `Interpreter: ${current.interpreterCalls} calls, ${current.interpreterTokens.input}/${current.interpreterTokens.output} tokens`,
       ...(costs.length === 0 ? [] : [`Costs: ${costs.join(", ")}`]),
       `Selected: ${current.selectedNames.join(", ") || "none"}; loader failures: ${current.loaderFailures}`
