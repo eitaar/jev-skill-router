@@ -92,7 +92,8 @@ export async function interpretTask(input: InterpretTaskInput): Promise<Interpre
   let model: Model<Api> | undefined;
   try {
     if (provider && modelId) {
-      model = input.registry.getAvailable().find(candidate => candidate.provider === provider && candidate.id === modelId);
+      const matches = input.registry.getAvailable().filter(candidate => candidate.provider === provider && candidate.id === modelId);
+      if (matches.length === 1) model = matches[0];
     }
   } catch {
     return fallback("provider");

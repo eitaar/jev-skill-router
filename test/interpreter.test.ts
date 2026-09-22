@@ -14,6 +14,17 @@ test("uses exact Luna model at low reasoning without changing the main model", a
   assert.deepEqual(activeModel, { provider: "openai-codex", id: "gpt-6-sol" });
 });
 
+test("does not select an arbitrary model when Luna resolution is ambiguous", async () => {
+  const registry = fakeInterpreterRegistry([fakeAssistant('{"task":"must not be used"}')]);
+  const model = registry.getAvailable()[0]!;
+  registry.getAvailable = () => [model, { ...model }];
+  const result = await interpretTask({ registry, modelRef: "openai-codex/gpt-6-luna", context: "raw task", timeoutMs: 1000 });
+  assert.equal(result.task, "raw task");
+  assert.equal(result.fallbackUsed, true);
+  assert.equal(result.attempts, 0);
+  assert.equal(registry.calls.length, 0);
+});
+
 test("retries malformed JSON once then succeeds with a repair-only prompt", async () => {
   const registry = fakeInterpreterRegistry([fakeAssistant("not json"), fakeAssistant('{"task":"Fix keyboard accessibility"}')]);
   const result = await interpretTask({ registry, modelRef: "openai-codex/gpt-6-luna", context: "fix it", timeoutMs: 1000 });
