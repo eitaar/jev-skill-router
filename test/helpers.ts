@@ -1,5 +1,7 @@
 import { createAssistantMessageEventStream, type Api, type AssistantMessage, type Context, type Model, type SimpleStreamOptions, type Usage } from "@earendil-works/pi-ai";
 import type { Skill } from "@earendil-works/pi-coding-agent";
+import type { JevClientLike, JevRequest, JevRequestOptions } from "../src/jev.js";
+import type { SkillRecord } from "../src/registry.js";
 
 const lunaModel: Model<Api> = {
   id: "gpt-6-luna",
@@ -48,6 +50,34 @@ export function fakeInterpreterRegistry(responses: readonly AssistantMessage[]) 
       return stream;
     }
   };
+}
+
+export function fakeJev(handler: (request: JevRequest, call: number, options?: JevRequestOptions) => unknown | Promise<unknown>) {
+  const requests: JevRequest[] = [];
+  const calls: Array<{ request: JevRequest; options?: JevRequestOptions }> = [];
+  const client: JevClientLike = {
+    async systemOne(request, options) {
+      requests.push(request);
+      calls.push({ request, ...(options === undefined ? {} : { options }) });
+      return handler(request, requests.length - 1, options);
+    }
+  };
+  return { ...client, requests, calls };
+}
+
+export function makeSkillRecords(names: readonly string[]): SkillRecord[] {
+  return names.map(name => {
+    const baseDir = `C:/skills/${name}`;
+    const filePath = `${baseDir}/SKILL.md`;
+    return {
+      name,
+      description: `Instructions for ${name}`,
+      filePath,
+      baseDir,
+      disableModelInvocation: false,
+      sourceInfo: { path: filePath, source: "local", scope: "user", origin: "top-level", baseDir }
+    };
+  });
 }
 
 export function makeSkills(count: number, options: { manualOnly?: readonly number[] } = {}): Skill[] {
