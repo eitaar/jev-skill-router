@@ -2,6 +2,8 @@ import { createAssistantMessageEventStream, type Api, type AssistantMessage, typ
 import type { Skill } from "@earendil-works/pi-coding-agent";
 import type { JevClientLike, JevRequest, JevRequestOptions } from "../src/jev.js";
 import type { SkillRecord } from "../src/registry.js";
+import { DEFAULT_CONFIG } from "../src/config.js";
+import type { RouterConfig } from "../src/types.js";
 
 const lunaModel: Model<Api> = {
   id: "gpt-6-luna",
@@ -78,6 +80,50 @@ export function makeSkillRecords(names: readonly string[]): SkillRecord[] {
       sourceInfo: { path: filePath, source: "local", scope: "user", origin: "top-level", baseDir }
     };
   });
+}
+
+interface AutomaticRouteFixture {
+  config: RouterConfig;
+  registry: readonly SkillRecord[];
+  visible: ReadonlySet<string>;
+  supplied: ReadonlySet<string>;
+  currentPrompt: string;
+  context: string;
+  signal: AbortSignal;
+}
+
+interface OnDemandRouteFixture {
+  config: RouterConfig;
+  registry: readonly SkillRecord[];
+  visible: ReadonlySet<string>;
+  supplied: ReadonlySet<string>;
+  task: string;
+  signal: AbortSignal;
+}
+
+export function makeAutomaticRouteInput(overrides: Partial<AutomaticRouteFixture> = {}): AutomaticRouteFixture {
+  return {
+    config: { ...DEFAULT_CONFIG, visibleSkills: [] },
+    registry: [],
+    visible: new Set(),
+    supplied: new Set(),
+    currentPrompt: "Complete the requested task",
+    context: "Current request: Complete the requested task",
+    signal: new AbortController().signal,
+    ...overrides
+  };
+}
+
+export function makeOnDemandRouteInput(overrides: Partial<OnDemandRouteFixture> = {}): OnDemandRouteFixture {
+  return {
+    config: { ...DEFAULT_CONFIG, visibleSkills: [] },
+    registry: [],
+    visible: new Set(),
+    supplied: new Set(),
+    task: "Complete the requested task",
+    signal: new AbortController().signal,
+    ...overrides
+  };
 }
 
 export function makeSkills(count: number, options: { manualOnly?: readonly number[] } = {}): Skill[] {
