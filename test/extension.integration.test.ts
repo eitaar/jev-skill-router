@@ -21,6 +21,7 @@ import type { RouteMessage } from "../src/router.js";
 interface HarnessOptions {
   skillCount?: number;
   visibleCount?: number;
+  visibleSkills?: readonly string[];
   manualOnly?: readonly number[];
   autoRouting?: boolean;
   interpreterModel?: string;
@@ -79,7 +80,7 @@ async function makeHarness(t: test.TestContext, options: HarnessOptions = {}): P
     await writeFile(join(directory, "SKILL.md"), `---\nname: ${name}\ndescription: Instructions for ${name}\n${manual}---\nBody for ${name}: keyboard accessibility and React dashboard guidance.\n`);
   }));
   await writeFile(join(configDir, "jev-skill-router.json"), JSON.stringify({
-    visibleSkills: skillNames.slice(0, visibleCount),
+    visibleSkills: options.visibleSkills ?? skillNames.slice(0, visibleCount),
     autoRouting: options.autoRouting ?? true,
     interpreterModel: options.interpreterModel ?? "router-test/luna"
   }));
@@ -218,6 +219,46 @@ test("Pi filters only the structured skill section, scans all hidden skills, and
   assert.equal(result.messages[0]?.customType, "jev-skill-router");
   assert.equal(harness.interpreterCalls.length, 1);
   assert.equal(harness.interpreterCalls[0]?.reasoning, "low");
+});
+
+test("an all-unknown visible list keeps the native catalog, skips automatic routing, and warns safely", async t => {
+  const harness = await makeHarness(t, { skillCount: 12, visibleSkills: ["C:/sensitive/project/typo-skill"] });
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = message => warnings.push(String(message));
+  try {
+    const result = await beforeAgentStart(harness, "Choose relevant implementation guidance");
+    assert.equal(result.systemPromptOptions.skills.length, 12);
+    assert.equal(harness.requests.length, 0);
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0]!, /typo-skill/);
+  assert.ok(!warnings[0]!.includes(harness.cwd));
+  assert.ok(!warnings[0]!.includes("C:/sensitive/project"));
+
+  const empty = await makeHarness(t, { skillCount: 3, visibleSkills: [] });
+  const emptyResult = await beforeAgentStart(empty, "Choose relevant implementation guidance");
+  assert.equal(emptyResult.systemPromptOptions.skills.length, 0);
+  assert.equal(empty.requests.length, 1);
+});
+
+test("a mixed visible list keeps valid names, routes hidden skills, and warns for unknown names", async t => {
+  const harness = await makeHarness(t, { skillCount: 12, visibleSkills: ["hidden-003", "typo-skill"] });
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = message => warnings.push(String(message));
+  try {
+    const result = await beforeAgentStart(harness, "Choose relevant implementation guidance");
+    assert.deepEqual(result.systemPromptOptions.skills.map(skill => skill.name), ["hidden-003"]);
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.equal(Object.keys(harness.requests[0]!.questions).length, 11);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0]!, /typo-skill/);
+  assert.ok(!warnings[0]!.includes(harness.cwd));
 });
 
 test("on-demand tool searches Jev directly and returns the matching native skill body", async t => {

@@ -60,6 +60,7 @@ The user file is `~/.pi/agent/jev-skill-router.json`. Project configuration is r
 - **Absent:** preserve the complete native skill catalog and disable routing.
 - **Present as `[]`:** advertise no normally advertisable skills and enable routing.
 - **Present with names:** advertise only matching normally advertisable skills and route among the rest.
+- **Unknown names:** emit a sanitized warning. Mixed lists retain valid names and ignore unknown ones. If a nonempty list has no valid names, preserve the full native catalog and skip automatic routing for that call; `/jev-skills status` reports this fallback. This is distinct from intentional `[]`.
 
 Manual-only skills (`disable-model-invocation: true`) are never advertised by the router. They remain available through Pi's native `/skill:name` command and are eligible for `jev_skill_search`, but not automatic routing. Invalid configuration values are ignored; `/jev-skills status` shows the effective configuration and registry counts.
 
@@ -96,7 +97,7 @@ The tool accepts task text, not paths. The returned skill bodies remove the need
 - `/jev-skills on` / `/jev-skills off` — enable or disable automatic routing for this session.
 - `/jev-skills debug on` / `/jev-skills debug off` — toggle sanitized UI diagnostics for this session.
 - `/jev-skills test <task>` — dry-run interpretation, classification, and loading without injection or supplied-state mutation.
-- `/jev-skills stats` — session route, usage, coverage, and cost metrics.
+- `/jev-skills stats` — per-route-kind usage, latency, candidate/evaluation, coverage, error, and cost metrics.
 - `jev_skill_search` — on-demand hidden-skill search for the main model.
 
 Pi preserves its native command collision behavior. If another extension already registers `jev-skills`, Pi may assign an invocation suffix such as `/jev-skills:1`; use the command name Pi lists in that session.
@@ -120,7 +121,7 @@ Pi preserves its native command collision behavior. If another extension already
 
 ## Metrics and limitations
 
-Provider-returned usage is labeled **measured**. Interpreter provider-reported cost is measured. Jev cost is omitted unless explicit `jevPricing` is configured; that cost is labeled **estimated**. Missing usage is not invented, and the main model's own usage remains Pi's accounting.
+`/jev-skills stats` breaks down automatic, on-demand, and dry-run routes separately, including provider usage, latency, candidate/evaluation counts, complete/partial/none coverage, no-match and loader counts, and error categories. Provider-returned usage is labeled **measured**. Interpreter provider-reported cost is measured. Jev cost is omitted unless explicit `jevPricing` is configured; that cost is labeled **estimated**. Missing usage is not invented, and the main model's own usage remains Pi's accounting.
 
 Do not claim token or cost savings without a controlled comparison against an all-skills-visible baseline using identical tasks and accounting for the main model, Luna, Jev, and any additional main-model tool turns.
 

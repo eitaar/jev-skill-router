@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Usage } from "@earendil-works/pi-ai";
 import { classifySkills, type ClassificationResult, type SkillProbability } from "../src/jev.js";
-import { loadSkills } from "../src/loader.js";
+import { loadSkills, readUtf8StreamBounded } from "../src/loader.js";
 import { createRouter } from "../src/router.js";
 import type { SkillRecord } from "../src/registry.js";
 import { fakeJev, makeAutomaticRouteInput, makeOnDemandRouteInput, makeSkillRecords } from "./helpers.js";
@@ -10,7 +10,7 @@ import { fakeJev, makeAutomaticRouteInput, makeOnDemandRouteInput, makeSkillReco
 function classification(
   skills: readonly SkillRecord[],
   selectedNames: readonly string[],
-  options: Partial<Pick<ClassificationResult, "coverage" | "evaluatedCount" | "usage" | "requests">> = {}
+  options: Partial<Pick<ClassificationResult, "coverage" | "evaluatedCount" | "usage" | "requests" | "errorCategory">> = {}
 ): ClassificationResult {
   const selected: SkillProbability[] = selectedNames.flatMap(name => {
     const skill = skills.find(candidate => candidate.name === name);
@@ -25,11 +25,27 @@ function classification(
     invalidAnswers: 0,
     usage: options.usage ?? { inputTokens: 100, outputTokens: 20 },
     requests: options.requests ?? 1,
-    latencyMs: 5
+    latencyMs: 5,
+    ...(options.errorCategory === undefined ? {} : { errorCategory: options.errorCategory })
   };
 }
 
 const interpreted = async () => ({ task: "Improve accessibility", fallbackUsed: false, attempts: 1, latencyMs: 3 });
+
+test("bounded UTF-8 reads stop consuming chunks as soon as the character limit is exceeded", async () => {
+  let chunksConsumed = 0;
+  async function* chunks(): AsyncGenerator<string> {
+    chunksConsumed++;
+    yield "é";
+    chunksConsumed++;
+    yield "💡x";
+    chunksConsumed++;
+    yield "must not be consumed";
+  }
+
+  await assert.rejects(readUtf8StreamBounded(chunks(), 2), /character limit/);
+  assert.equal(chunksConsumed, 2);
+});
 
 test("loader reads only the current canonical path and fences body text", async () => {
   const [skill] = makeSkillRecords(["frontend-design"]);
@@ -74,10 +90,12 @@ test("loader rejects stale classified paths before reading", async () => {
 test("loader skips missing and oversized files without blocking a valid skill", async () => {
   const skills = makeSkillRecords(["missing", "oversized", "valid"]);
   const registry = new Map(skills.map(skill => [skill.name, skill]));
+  const readLimits: number[] = [];
   const result = await loadSkills({
     selected: skills.map(skill => ({ skill, probability: 0.9 })),
     registry,
-    readFile: async path => {
+    readFile: async (path, maxChars) => {
+      readLimits.push(maxChars);
       if (path === skills[0]!.filePath) throw new Error("filesystem detail must not leak");
       if (path === skills[1]!.filePath) return "x".repeat(21);
       return "valid body";
@@ -86,6 +104,7 @@ test("loader skips missing and oversized files without blocking a valid skill", 
     maxLoadedChars: 2000,
     source: "on-demand"
   });
+  assert.deepEqual(readLimits, [20, 20, 20]);
   assert.deepEqual(result.suppliedSkills, ["valid"]);
   assert.deepEqual(result.skippedSkills, ["missing", "oversized"]);
   assert.match(result.content, /valid body/);
@@ -193,6 +212,50 @@ test("metrics label provider cost as measured and Jev pricing as estimated", asy
   router.metrics.reset();
   assert.equal(router.metrics.snapshot().routes.automatic, 0);
   assert.equal(router.metrics.snapshot().routes["on-demand"], 0);
+});
+
+test("session stats split usage, coverage, and errors by route kind", async () => {
+  const skillsByRoute = [
+    makeSkillRecords(["automatic-a", "automatic-b"]),
+    makeSkillRecords(["on-demand"]),
+    makeSkillRecords(["dry-run-a", "dry-run-b"])
+  ];
+  const classifications = [
+    classification(skillsByRoute[0]!, [], { coverage: "partial", evaluatedCount: 1, requests: 2, usage: { inputTokens: 100, outputTokens: 20 }, errorCategory: "timeout" }),
+    classification(skillsByRoute[1]!, [], { coverage: "complete", evaluatedCount: 1, usage: { inputTokens: 5, outputTokens: 1 } }),
+    classification(skillsByRoute[2]!, [], { coverage: "none", evaluatedCount: 0, requests: 0, usage: {}, errorCategory: "authentication" })
+  ];
+  let call = 0;
+  const usage: Usage = {
+    input: 7,
+    output: 3,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 10,
+    cost: { input: 0.01, output: 0.02, cacheRead: 0, cacheWrite: 0, total: 0.03 }
+  };
+  const router = createRouter({
+    classifier: async () => classifications[call++]!,
+    interpreter: async () => ({ task: "stats task", fallbackUsed: false, attempts: 1, latencyMs: 4, usage }),
+    readFile: async () => "body"
+  });
+
+  await router.routeAutomatic(makeAutomaticRouteInput({ registry: skillsByRoute[0]! }));
+  await router.routeOnDemand(makeOnDemandRouteInput({ registry: skillsByRoute[1]! }));
+  await router.routeDryRun(makeAutomaticRouteInput({ registry: skillsByRoute[2]! }));
+
+  const lines = router.metrics.formatStats().split("\n");
+  const lineFor = (kind: string) => lines.find(line => line.startsWith(`${kind}:`)) ?? "";
+  assert.match(lineFor("automatic"), /100\/20 tokens/);
+  assert.match(lineFor("automatic"), /candidates\/evaluated 2\/1/);
+  assert.match(lineFor("automatic"), /coverage complete 0, partial 1, none 0/);
+  assert.match(lineFor("automatic"), /errors timeout 1/);
+  assert.match(lineFor("on-demand"), /5\/1 tokens/);
+  assert.match(lineFor("on-demand"), /coverage complete 1, partial 0, none 0/);
+  assert.match(lineFor("on-demand"), /errors none/);
+  assert.match(lineFor("dry-run"), /unavailable tokens/);
+  assert.match(lineFor("dry-run"), /coverage complete 0, partial 0, none 1/);
+  assert.match(lineFor("dry-run"), /errors authentication 1/);
 });
 
 test("route details retain Jev selections when loading skips one file", async () => {

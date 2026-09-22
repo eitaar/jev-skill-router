@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename } from "node:path";
 import { AuthenticationError, TypeSafeClient } from "@typesafe-ai/sdk";
@@ -8,9 +7,10 @@ import { loadConfig } from "../src/config.js";
 import { collectInterpretationContext } from "../src/context.js";
 import { interpretTask } from "../src/interpreter.js";
 import { adaptTypeSafeClient, classifySkills, type JevClientLike } from "../src/jev.js";
-import { filterVisible, captureRegistry, type SkillRecord } from "../src/registry.js";
+import { filterVisible, captureRegistry, resolveVisibleSkills, type SkillRecord } from "../src/registry.js";
 import { createRouter, type RouteDetails, type RouteResult, type RouterOptions } from "../src/router.js";
 import { reconstructSuppliedSkills } from "../src/state.js";
+import { readUtf8FileBounded } from "../src/loader.js";
 import type { SessionOverrides } from "../src/types.js";
 
 export interface JevSkillRouterOptions {
@@ -51,13 +51,15 @@ function statusText(
 
   const skills = [...(registry?.values() ?? [])];
   const advertisable = skills.filter(skill => !skill.disableModelInvocation);
-  const visibleNames = config.visibleSkills;
-  const visibleCount = visibleNames
-    ? advertisable.filter(skill => visibleNames.includes(skill.name)).length
-    : advertisable.length;
+  const visibility = registry && config.visibleSkills !== undefined
+    ? resolveVisibleSkills(registry, config.visibleSkills)
+    : undefined;
+  const visibleCount = visibility?.visibleNames.length
+    ?? (config.visibleSkills ? advertisable.filter(skill => config.visibleSkills!.includes(skill.name)).length : advertisable.length);
   return [
     `Configuration: ${JSON.stringify(config)}`,
-    `Routing configured: ${routingConfigured ? "yes" : "no"}; enabled: ${config.enabled ? "yes" : "no"}; automatic: ${config.autoRouting ? "on" : "off"}`,
+    `Routing configured: ${routingConfigured && !visibility?.fallbackToNative ? "yes" : "no"}; enabled: ${config.enabled ? "yes" : "no"}; automatic: ${config.autoRouting ? "on" : "off"}`,
+    `Visibility: ${visibility?.fallbackToNative ? "unknown names; native catalog retained" : visibility?.unknownNames.length ? `${visibility.unknownNames.length} unknown names ignored` : "valid"}`,
     `Skills: ${skills.length} discovered, ${visibleCount} visible, ${advertisable.length - visibleCount} hidden, ${skills.length - advertisable.length} manual-only`,
     `Interpreter ${config.interpreterModel}: ${lunaAvailable ? "available" : "unavailable"}; TypeSafe key: ${process.env.TYPESAFE_API_KEY?.trim() ? "present" : "missing"}`,
     `Last route: ${lastRoute ? `${lastRoute.routeKind}, ${lastRoute.evaluatedCount}/${lastRoute.candidateCount} evaluated, ${lastRoute.coverage}, selected ${lastRoute.selected.map(item => item.name).join(", ") || "none"}${lastRoute.errorCategory ? `, error ${lastRoute.errorCategory}` : ""}` : "none"}`
@@ -86,6 +88,26 @@ export function registerJevSkillRouter(pi: ExtensionAPI, options: JevSkillRouter
   let lastRoute: RouteDetails | undefined;
   let lastRouter: Router | undefined;
   let sdkClient: JevClientLike | undefined;
+  let lastVisibleWarningSignature: string | undefined;
+
+  const warnUnknownVisibleSkills = (ctx: ExtensionContext, unknownNames: readonly string[]): void => {
+    if (unknownNames.length === 0) {
+      lastVisibleWarningSignature = undefined;
+      return;
+    }
+    const signature = JSON.stringify(unknownNames);
+    if (signature === lastVisibleWarningSignature) return;
+    lastVisibleWarningSignature = signature;
+    const displayedNames = unknownNames.slice(0, 10).map(name => {
+      const leaf = name.replaceAll("\\", "/").split("/").at(-1) ?? name;
+      return JSON.stringify(Array.from(leaf).slice(0, 80).join(""));
+    });
+    const remaining = unknownNames.length - displayedNames.length;
+    const more = remaining > 0 ? ` (+${remaining} more)` : "";
+    const warning = `Jev Skill Router: unknown visibleSkills entries ${displayedNames.join(", ")}${more}; check the skill names in router config.`;
+    if (ctx.hasUI) ctx.ui.notify(warning, "warning");
+    else console.warn(warning);
+  };
 
   const loadEffectiveConfig = async (ctx: ExtensionContext) => {
     const result = await loadConfig({
@@ -144,7 +166,7 @@ export function registerJevSkillRouter(pi: ExtensionAPI, options: JevSkillRouter
             ...(input.signal === undefined ? {} : { signal: input.signal })
           });
         },
-        readFile: path => readFile(path, "utf8")
+        readFile: readUtf8FileBounded
       };
       router = createRouter(dependencies);
       routers.set(key, router);
@@ -167,7 +189,9 @@ export function registerJevSkillRouter(pi: ExtensionAPI, options: JevSkillRouter
 
     const entries = ctx.sessionManager.buildContextEntries();
     const supplied = reconstructSuppliedSkills(entries);
-    const visible = new Set(effective.config.visibleSkills);
+    const visibility = resolveVisibleSkills(registry, effective.config.visibleSkills);
+    warnUnknownVisibleSkills(ctx, visibility.unknownNames);
+    const visible = new Set(visibility.visibleNames);
     const routeInput = {
       config: effective.config,
       registry: [...registry.values()],
@@ -203,8 +227,10 @@ export function registerJevSkillRouter(pi: ExtensionAPI, options: JevSkillRouter
       const effective = await loadEffectiveConfig(ctx);
       registry = captureRegistry(event.systemPromptOptions.skills, pi.getCommands());
       if (!effective.routingConfigured || !effective.config.visibleSkills) return;
-      event.systemPromptOptions.skills = filterVisible(registry, effective.config.visibleSkills);
-      if (!effective.config.enabled || !effective.config.autoRouting || !isSubstantive(event.prompt)) return;
+      const visibility = resolveVisibleSkills(registry, effective.config.visibleSkills);
+      warnUnknownVisibleSkills(ctx, visibility.unknownNames);
+      event.systemPromptOptions.skills = filterVisible(registry, visibility.visibleNames);
+      if (visibility.fallbackToNative || !effective.config.enabled || !effective.config.autoRouting || !isSubstantive(event.prompt)) return;
       const result = await runRoute(ctx, event.prompt, "automatic", ctx.signal, effective);
       return result?.message ? { message: result.message } : undefined;
     } catch {

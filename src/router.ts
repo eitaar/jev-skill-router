@@ -69,7 +69,7 @@ export interface RouteResult {
 export interface RouterOptions {
   classifier: (input: RouterClassificationInput) => Promise<ClassificationResult>;
   interpreter: (input: RouterInterpreterInput) => Promise<InterpretationResult>;
-  readFile: (path: string) => Promise<string>;
+  readFile: (path: string, maxChars: number) => Promise<string>;
 }
 
 export function createRouter(options: RouterOptions) {

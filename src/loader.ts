@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import type { SkillProbability } from "./jev.js";
 import type { SkillRecord } from "./registry.js";
 
 export interface LoadSkillsInput {
   selected: readonly SkillProbability[];
   registry: ReadonlyMap<string, SkillRecord>;
-  readFile: (path: string) => Promise<string>;
+  readFile: (path: string, maxChars: number) => Promise<string>;
   maxSkillChars: number;
   maxLoadedChars: number;
   source: "automatic" | "on-demand" | "dry-run";
@@ -19,6 +20,26 @@ export interface LoadSkillsResult {
 
 function charCount(text: string): number {
   return Array.from(text).length;
+}
+
+export async function readUtf8StreamBounded(chunks: AsyncIterable<string>, maxChars: number): Promise<string> {
+  if (!Number.isSafeInteger(maxChars) || maxChars < 0) throw new RangeError("Invalid character limit");
+
+  const parts: string[] = [];
+  let characters = 0;
+  for await (const chunk of chunks) {
+    const chunkCharacters = Array.from(chunk).length;
+    if (characters + chunkCharacters > maxChars) throw new RangeError("Skill file exceeds the character limit");
+    parts.push(chunk);
+    characters += chunkCharacters;
+  }
+  return parts.join("");
+}
+
+export function readUtf8FileBounded(path: string, maxChars: number): Promise<string> {
+  if (!Number.isSafeInteger(maxChars) || maxChars < 0) throw new RangeError("Invalid character limit");
+  const highWaterMark = Math.min(64 * 1024, Math.max(4, (maxChars + 1) * 4));
+  return readUtf8StreamBounded(createReadStream(path, { encoding: "utf8", highWaterMark }), maxChars);
 }
 
 function escapeAttribute(value: string): string {
@@ -66,7 +87,7 @@ export async function loadSkills(input: LoadSkillsInput): Promise<LoadSkillsResu
 
     let body: string;
     try {
-      body = await input.readFile(skill.filePath);
+      body = await input.readFile(skill.filePath, input.maxSkillChars);
       if (typeof body !== "string" || charCount(body) > input.maxSkillChars) {
         skippedSkills.push(name);
         continue;

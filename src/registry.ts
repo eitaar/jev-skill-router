@@ -28,6 +28,19 @@ export function filterVisible(registry: ReadonlyMap<string, SkillRecord>, names:
   return [...registry.values()].filter(skill => visibleNames.has(skill.name) && !skill.disableModelInvocation);
 }
 
+export function resolveVisibleSkills(registry: ReadonlyMap<string, SkillRecord>, configured: readonly string[]) {
+  const normalSkills = [...registry.values()].filter(skill => !skill.disableModelInvocation).map(skill => skill.name);
+  const knownNames = new Set(normalSkills);
+  const visibleNames = configured.filter(name => knownNames.has(name));
+  const unknownNames = configured.filter(name => !knownNames.has(name));
+  const fallbackToNative = configured.length > 0 && visibleNames.length === 0;
+  return {
+    visibleNames: fallbackToNative ? normalSkills : visibleNames,
+    unknownNames,
+    fallbackToNative
+  };
+}
+
 export function eligibleSkills(
   registry: ReadonlyMap<string, SkillRecord>,
   visible: ReadonlySet<string>,
