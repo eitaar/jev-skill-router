@@ -1,4 +1,54 @@
+import { createAssistantMessageEventStream, type Api, type AssistantMessage, type Context, type Model, type SimpleStreamOptions, type Usage } from "@earendil-works/pi-ai";
 import type { Skill } from "@earendil-works/pi-coding-agent";
+
+const lunaModel: Model<Api> = {
+  id: "gpt-6-luna",
+  name: "GPT-6 Luna",
+  api: "openai-codex-responses",
+  provider: "openai-codex",
+  baseUrl: "https://example.invalid",
+  reasoning: true,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 128_000,
+  maxTokens: 4096
+};
+
+export function fakeAssistant(text: string, options: { usage?: Usage } = {}): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    api: lunaModel.api,
+    provider: lunaModel.provider,
+    model: lunaModel.id,
+    usage: options.usage ?? {
+      input: 5,
+      output: 4,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 9,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
+    },
+    stopReason: "stop",
+    timestamp: 0
+  };
+}
+
+export function fakeInterpreterRegistry(responses: readonly AssistantMessage[]) {
+  const calls: Array<{ model: Model<Api>; context: Context; options: SimpleStreamOptions }> = [];
+  let responseIndex = 0;
+  return {
+    calls,
+    getAvailable: () => [lunaModel],
+    streamSimple(model: Model<Api>, context: Context, options: SimpleStreamOptions = {}) {
+      calls.push({ model, context, options });
+      const message = responses[responseIndex++] ?? fakeAssistant("unexpected extra interpreter request");
+      const stream = createAssistantMessageEventStream();
+      stream.push({ type: "done", reason: "stop", message });
+      return stream;
+    }
+  };
+}
 
 export function makeSkills(count: number, options: { manualOnly?: readonly number[] } = {}): Skill[] {
   return Array.from({ length: count }, (_, index) => {
