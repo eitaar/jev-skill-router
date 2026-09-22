@@ -147,4 +147,4 @@ npm run typecheck
 npm run smoke
 ```
 
-`npm test` runs the deterministic suite plus the credential-gated live smoke test (which is skipped without `TYPESAFE_API_KEY`). `npm run smoke` runs only that live test. No Pi settings need to be changed to build or test the package.
+`npm test` runs the deterministic unit and integration suite; `npm run smoke` separately runs the credential-gated live test (skipped without `TYPESAFE_API_KEY`). The live test requires the exact Luna model in the installed Pi model registry and fails clearly if it is unavailable. No Pi settings need to be changed to build or test the package.

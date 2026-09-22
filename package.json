@@ -8,8 +8,8 @@
   "pi": { "extensions": ["./extensions/index.ts"] },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --test --import tsx test/*.test.ts",
-    "test:unit": "node --test --import tsx test/*.test.ts",
+    "test": "node --test --import tsx test/config.test.ts test/registry-context-state.test.ts test/interpreter.test.ts test/jev.test.ts test/loader-router.test.ts test/extension.integration.test.ts",
+    "test:unit": "node --test --import tsx test/config.test.ts test/registry-context-state.test.ts test/interpreter.test.ts test/jev.test.ts test/loader-router.test.ts test/extension.integration.test.ts",
     "smoke": "node --test --import tsx test/live-smoke.test.ts"
   },
   "dependencies": { "@typesafe-ai/sdk": "^0.6.0" },
