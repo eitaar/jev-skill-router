@@ -1,13 +1,6 @@
 import type { Skill, SlashCommandInfo } from "@earendil-works/pi-coding-agent";
 
-export interface SkillRecord {
-  name: string;
-  description: string;
-  filePath: string;
-  baseDir: string;
-  disableModelInvocation: boolean;
-  sourceInfo: { path: string; source: string; scope: string; origin: string; baseDir?: string };
-}
+export type SkillRecord = Skill;
 
 export function captureRegistry(skills: readonly Skill[], commands: readonly SlashCommandInfo[]): Map<string, SkillRecord> {
   const skillCommands = new Map<string, SlashCommandInfo>();
@@ -20,18 +13,12 @@ export function captureRegistry(skills: readonly Skill[], commands: readonly Sla
   const registry = new Map<string, SkillRecord>();
   for (const skill of skills) {
     const command = skillCommands.get(`skill:${skill.name}`);
-    const filePath = skill.filePath || skill.sourceInfo.path || command?.sourceInfo.path || "";
-    const sourceInfo = !skill.filePath && !skill.sourceInfo.path && command?.sourceInfo.path
-      ? { ...skill.sourceInfo, path: command.sourceInfo.path }
-      : skill.sourceInfo;
-    registry.set(skill.name, {
-      name: skill.name,
-      description: skill.description,
-      filePath,
-      baseDir: skill.baseDir,
-      disableModelInvocation: skill.disableModelInvocation,
-      sourceInfo
-    });
+    const canonicalPath = skill.filePath || skill.sourceInfo.path || command?.sourceInfo.path;
+    if (canonicalPath) {
+      if (!skill.filePath) skill.filePath = canonicalPath;
+      if (!skill.sourceInfo.path) skill.sourceInfo.path = canonicalPath;
+    }
+    registry.set(skill.name, skill);
   }
   return registry;
 }

@@ -38,8 +38,8 @@ test("registry preserves native skill order and paths rather than trusting comma
   ]);
 
   assert.deepEqual([...registry.keys()], [second.name, first.name]);
-  assert.equal(registry.get(first.name)?.filePath, first.filePath);
-  assert.equal(registry.get(first.name)?.sourceInfo, first.sourceInfo);
+  assert.strictEqual(registry.get(first.name), first);
+  assert.strictEqual(filterVisible(registry, [first.name])[0], first);
   assert.equal(registry.has("orphan"), false);
 });
 
@@ -53,6 +53,7 @@ test("matching native skill command fills a missing canonical path", () => {
   };
   const registry = captureRegistry([withoutPath], [skillCommand(skill.name, path)]);
 
+  assert.strictEqual(registry.get(skill.name), withoutPath);
   assert.equal(registry.get(skill.name)?.filePath, path);
   assert.equal(registry.get(skill.name)?.sourceInfo.path, path);
 });
