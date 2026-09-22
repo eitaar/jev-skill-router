@@ -65,7 +65,7 @@ export function adaptTypeSafeClient(client: TypeSafeClient): JevClientLike {
   return { systemOne: (request, options) => client.systemOne(request, options) };
 }
 
-const SIZE_ERROR = /(?:\b(?:question|questions|request|payload)\b.{0,100}\b(?:size|large|big|limit|maximum|too many|exceed)\b|\b(?:size|large|big|limit|maximum|too many|exceed)\b.{0,100}\b(?:question|questions|request|payload)\b)/i;
+const SIZE_ERROR = /(?:\b(?:request|payload)\b.{0,80}\b(?:size|length|too large|too big)\b|\b(?:size|length)\b.{0,80}\b(?:request|payload)\b|\bquestions?\b.{0,80}\b(?:size|length|count|number|too large|too big|too many|(?:at most|no more than)\s+\d+\s+items?)\b|\b(?:number|count)\s+of\s+questions?\b|\b(?:too many|more than|at most|no more than|exceeds?)\s+\d+\s+questions?\b|\b(?:maximum|max|at most|no more than)\s+(?:number\s+of\s+)?(?:\d+\s+)?questions?\b|\b(?:more than|at most|no more than|exceeds?)\s+\d+\s+(?:bytes?|characters?)\b)/i;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

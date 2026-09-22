@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { APIError, APIUserAbortError, AuthenticationError, InternalServerError } from "@typesafe-ai/sdk";
+import { APIError, APITimeoutError, APIUserAbortError, AuthenticationError, InternalServerError } from "@typesafe-ai/sdk";
 import test from "node:test";
 import { classifySkills } from "../src/jev.js";
 import { fakeJev, makeSkillRecords } from "./helpers.js";
@@ -95,6 +95,22 @@ test("keeps completed chunk answers and marks later failure partial", async () =
   assert.equal(result.scores.some(score => score.skill.name === "skill-100"), false);
   assert.deepEqual(result.usage, { inputTokens: 4, outputTokens: 2 });
   assert.equal(result.errorCategory, "provider");
+});
+
+test("does not chunk unrelated TypeSafe request validation errors", async () => {
+  const jev = fakeJev(() => { throw new APIError(422, { message: "request maximum tokens must be positive" }, new Headers()); });
+  const result = await classify(jev, ["a", "b"], { chunkSize: 1 });
+  assert.equal(jev.requests.length, 1);
+  assert.equal(result.coverage, "none");
+  assert.equal(result.errorCategory, "provider");
+});
+
+test("does not chunk TypeSafe timeouts", async () => {
+  const jev = fakeJev(() => { throw new APITimeoutError(1000); });
+  const result = await classify(jev, ["a", "b"], { chunkSize: 1 });
+  assert.equal(jev.requests.length, 1);
+  assert.equal(result.coverage, "none");
+  assert.equal(result.errorCategory, "timeout");
 });
 
 test("does not fall back to chunks for authentication, cancellation, or server errors", async () => {
