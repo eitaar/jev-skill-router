@@ -1,10 +1,10 @@
 # Jev Skill Router
 
-A Pi 0.87-compatible extension that limits the skill metadata advertised to the main model and semantically supplies relevant hidden skill instructions. It preserves Pi's native skill discovery, `/skill:name` commands, and trusted paths.
+A Pi 0.87.1-compatible extension that limits the skill metadata advertised to the main model and semantically supplies relevant hidden skill instructions. It preserves Pi's native skill discovery, `/skill:name` commands, and trusted paths.
 
 ## Requirements
 
-- Pi 0.87.0-compatible extension APIs.
+- Pi 0.87.1 (the 0.87.0 bundled model catalog does not include the default `openai-codex/gpt-6-luna`).
 - Node.js 20 or newer for this package. The `@earendil-works/pi-coding-agent@0.87.0` package used for compatibility testing declares Node.js `>=22.19.0`; use the stricter minimum declared by your Pi installation.
 - A configured Pi `openai-codex/gpt-6-luna` model for interpretation and a TypeSafe API key for Jev classification.
 
@@ -105,7 +105,7 @@ Pi preserves its native command collision behavior. If another extension already
 ## Authentication and troubleshooting
 
 - `/jev-skills status` reports whether the exact interpreter model is available and whether `TYPESAFE_API_KEY` is present; it never displays the key.
-- If Luna is unavailable, verify Pi's configured model is exactly `openai-codex/gpt-6-luna` and authenticate the `openai-codex` provider through Pi. The router uses a side-call and does not call `pi.setModel()` or change thinking level.
+- If Luna is unavailable, use Pi 0.87.1 or newer, verify the model registry includes exactly `openai-codex/gpt-6-luna`, and authenticate the `openai-codex` provider through Pi. The router uses a side-call and does not call `pi.setModel()` or change thinking level.
 - If Jev reports authentication failure, make sure the Pi process inherited `TYPESAFE_API_KEY`, then restart Pi after changing the environment.
 - The smoke test is credential-gated: `npm run smoke`. It contacts the real Luna and Jev adapters only when the TypeSafe key is set and prints model IDs, selected synthetic skill names, token counts, and latency—not prompts, API keys, or skill bodies.
 - Jev full-scan is attempted first. Only an explicit request-size error triggers configured chunking; authentication, cancellation, timeouts, and generic provider failures are not treated as size errors.
