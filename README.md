@@ -29,7 +29,7 @@ This is an opt-in activation step, separate from building or testing this reposi
 pi install .
 ```
 
-Pi writes the package registration to user settings by default; `pi install -l .` writes project settings. Neither command is needed to run this repository's tests.
+Pi writes the package registration to user settings by default; `pi install -l .` writes project settings. Neither command is needed to run this repository's tests. The package also includes `/skill:using-jev-skill-router`, a short guide to searching and inspecting routes. Add `"using-jev-skill-router"` to `visibleSkills` if you want the main model to see its description on every turn.
 
 ## Configuration
 
