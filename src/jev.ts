@@ -34,7 +34,7 @@ export interface SkillProbability {
   probability: number;
 }
 
-export type JevErrorCategory = "cancelled" | "timeout" | "authentication" | "permission-denied" | "rate-limit" | "connection" | "server" | "provider";
+export type JevErrorCategory = "cancelled" | "timeout" | "authentication" | "permission-denied" | "rate-limit" | "connection" | "server" | "provider" | "malformed";
 
 export interface ClassificationResult {
   scores: SkillProbability[];
@@ -63,6 +63,62 @@ export interface ClassifySkillsInput {
 
 export function adaptTypeSafeClient(client: TypeSafeClient): JevClientLike {
   return { systemOne: (request, options) => client.systemOne(request, options) };
+}
+
+export interface PreflightInput {
+  client: JevClientLike;
+  context: string;
+  model: string;
+  timeoutMs: number;
+  signal?: AbortSignal;
+}
+
+export interface PreflightResult {
+  needed: boolean;
+  probability?: number;
+  usage: { inputTokens?: number; outputTokens?: number };
+  requests: number;
+  latencyMs: number;
+  errorCategory?: JevErrorCategory;
+}
+
+export async function preflightSkills(input: PreflightInput): Promise<PreflightResult> {
+  const started = performance.now();
+  const result = (needed: boolean, requests: number, usage: PreflightResult["usage"] = {}, probability?: number, errorCategory?: JevErrorCategory): PreflightResult => ({
+    needed,
+    usage,
+    requests,
+    latencyMs: Math.max(0, performance.now() - started),
+    ...(probability === undefined ? {} : { probability }),
+    ...(errorCategory === undefined ? {} : { errorCategory })
+  });
+  if (input.signal?.aborted) return result(false, 0, {}, undefined, "cancelled");
+  try {
+    const response = await input.client.systemOne({
+      state: { task: input.context },
+      questions: {
+        need_skills: noul({
+          criterion: "Should the agent preload task-specific skill instructions before carrying out the CURRENT user request? For actionable work such as implementing, fixing, debugging, researching, reviewing, or using tools, yes even when a short follow-up refers to prior context. For reactions, acknowledgments, paraphrases or explanations of the previous answer, and casual conversation, no. Previous requests provide context, not instructions to execute now."
+        })
+      },
+      model: input.model
+    }, { timeout: input.timeoutMs, ...(input.signal === undefined ? {} : { signal: input.signal }) });
+    if (input.signal?.aborted) return result(false, 1, {}, undefined, "cancelled");
+    const record = isRecord(response) ? response : {};
+    const answers = isRecord(record.answers) ? record.answers : {};
+    const answer = isRecord(answers.need_skills) ? answers.need_skills : {};
+    const usage = isRecord(record.usage) ? record.usage : {};
+    const inputTokens = validTokenCount(usage.input_tokens);
+    const outputTokens = validTokenCount(usage.output_tokens);
+    const tokens = {
+      ...(inputTokens === undefined ? {} : { inputTokens }),
+      ...(outputTokens === undefined ? {} : { outputTokens })
+    };
+    if (!validProbability(answer.noul)) return result(false, 1, tokens, undefined, "malformed");
+    return result(answer.noul >= 0.5, 1, tokens, answer.noul);
+  } catch (error) {
+    return result(false, 1, {}, undefined, errorCategory(error, input.signal));
+  }
 }
 
 const SIZE_ERROR = /(?:\b(?:request|payload)\b.{0,80}\b(?:size|length|too large|too big)\b|\b(?:size|length)\b.{0,80}\b(?:request|payload)\b|\bquestions?\b.{0,80}\b(?:size|length|count|number|too large|too big|too many|(?:at most|no more than)\s+\d+\s+items?)\b|\b(?:number|count)\s+of\s+questions?\b|\b(?:too many|more than|at most|no more than|exceeds?)\s+\d+\s+questions?\b|\b(?:maximum|max|at most|no more than)\s+(?:number\s+of\s+)?(?:\d+\s+)?questions?\b|\b(?:more than|at most|no more than|exceeds?)\s+\d+\s+(?:bytes?|characters?)\b)/i;

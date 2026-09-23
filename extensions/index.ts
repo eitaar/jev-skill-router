@@ -6,7 +6,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@e
 import { loadConfig } from "../src/config.js";
 import { collectInterpretationContext } from "../src/context.js";
 import { interpretTask } from "../src/interpreter.js";
-import { adaptTypeSafeClient, classifySkills, type JevClientLike } from "../src/jev.js";
+import { adaptTypeSafeClient, classifySkills, preflightSkills, type JevClientLike } from "../src/jev.js";
 import { filterVisible, captureRegistry, resolveVisibleSkills, type SkillRecord } from "../src/registry.js";
 import { createRouter, type RouteDetails, type RouteResult, type RouterOptions } from "../src/router.js";
 import { reconstructSuppliedSkills } from "../src/state.js";
@@ -62,7 +62,7 @@ function statusText(
     `Visibility: ${visibility?.fallbackToNative ? "unknown names; native catalog retained" : visibility?.unknownNames.length ? `${visibility.unknownNames.length} unknown names ignored` : "valid"}`,
     `Skills: ${skills.length} discovered, ${visibleCount} visible, ${advertisable.length - visibleCount} hidden, ${skills.length - advertisable.length} manual-only`,
     `Interpreter ${config.interpreterModel}: ${lunaAvailable ? "available" : "unavailable"}; TypeSafe key: ${process.env.TYPESAFE_API_KEY?.trim() ? "present" : "missing"}`,
-    `Last route: ${lastRoute ? `${lastRoute.routeKind}, ${lastRoute.evaluatedCount}/${lastRoute.candidateCount} evaluated, ${lastRoute.coverage}, selected ${lastRoute.selected.map(item => item.name).join(", ") || "none"}${lastRoute.errorCategory ? `, error ${lastRoute.errorCategory}` : ""}` : "none"}`
+    `Last route: ${lastRoute ? `${lastRoute.routeKind}, ${lastRoute.evaluatedCount}/${lastRoute.candidateCount} evaluated, ${lastRoute.coverage}, selected ${lastRoute.selected.map(item => item.name).join(", ") || "none"}${lastRoute.skipReason ? `, skipped ${lastRoute.skipReason}` : ""}${lastRoute.errorCategory ? `, error ${lastRoute.errorCategory}` : ""}` : "none"}`
   ].join("\n");
 }
 
@@ -72,6 +72,7 @@ function dryRunText(task: string, result: RouteResult): string {
   const interpreted = result.interpretation?.task ?? task;
   return [
     `Task: ${interpreted}`,
+    `Preflight: ${result.preflight ? `${result.preflight.needed ? "yes" : "no"}${result.preflight.probability === undefined ? "" : ` (${result.preflight.probability.toFixed(3)})`}` : "not run"}`,
     `Candidates/evaluated: ${result.details.candidateCount}/${result.details.evaluatedCount}`,
     `Scores: ${scores}`,
     `Selected: ${selected}`,
@@ -132,6 +133,18 @@ export function registerJevSkillRouter(pi: ExtensionAPI, options: JevSkillRouter
     let router = routers.get(key);
     if (!router) {
       const dependencies: RouterOptions = {
+        preflight: input => {
+          if (!options.jevClient && !process.env.TYPESAFE_API_KEY?.trim()) {
+            return Promise.resolve({ needed: false, usage: {}, requests: 0, latencyMs: 0, errorCategory: "authentication" });
+          }
+          return preflightSkills({
+            client: getJevClient(),
+            context: input.context,
+            model: input.config.jevModel,
+            timeoutMs: input.config.jevTimeoutMs,
+            ...(input.signal === undefined ? {} : { signal: input.signal })
+          });
+        },
         interpreter: input => interpretTask({
           registry: ctx.modelRegistry,
           modelRef: input.config.interpreterModel,
@@ -217,7 +230,7 @@ export function registerJevSkillRouter(pi: ExtensionAPI, options: JevSkillRouter
     lastRoute = result.details;
     if (effective.config.debug && ctx.hasUI) {
       const selected = result.details.selected.map(item => item.name).join(", ") || "none";
-      ctx.ui.notify(`Jev ${routeKind}: ${result.details.evaluatedCount}/${result.details.candidateCount} evaluated, ${result.details.coverage}, selected ${selected}${result.details.errorCategory ? `, error ${result.details.errorCategory}` : ""}`, "info");
+      ctx.ui.notify(`Jev ${routeKind}: ${result.details.evaluatedCount}/${result.details.candidateCount} evaluated, ${result.details.coverage}, selected ${selected}${result.details.skipReason ? `, skipped ${result.details.skipReason}` : ""}${result.details.errorCategory ? `, error ${result.details.errorCategory}` : ""}`, "info");
     }
     return result;
   };

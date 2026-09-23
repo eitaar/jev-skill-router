@@ -7,7 +7,7 @@ import { getAgentDir, ModelRegistry, ModelRuntime, readStoredCredential } from "
 import { TypeSafeClient } from "@typesafe-ai/sdk";
 import { DEFAULT_CONFIG } from "../src/config.js";
 import { interpretTask, type InterpreterRegistry } from "../src/interpreter.js";
-import { adaptTypeSafeClient, classifySkills, type JevClientLike } from "../src/jev.js";
+import { adaptTypeSafeClient, classifySkills, preflightSkills, type JevClientLike } from "../src/jev.js";
 import { makeSkillRecords } from "./helpers.js";
 
 const apiKey = process.env.TYPESAFE_API_KEY?.trim();
@@ -17,6 +17,8 @@ test("live Luna and Jev adapters return their documented shapes", { skip: !crede
   const result = await runLiveSmoke(apiKey!);
   assert.ok(result.interpretedTask.length > 0);
   assert.ok(Number.isInteger(result.jevUsage.inputTokens));
+  assert.equal(result.preflight.no.needed, false, `conversational follow-up must skip routing: ${JSON.stringify(result.preflight)}`);
+  assert.equal(result.preflight.yes.needed, true, `short actionable follow-up must proceed: ${JSON.stringify(result.preflight)}`);
   assert.ok(Number.isInteger(result.jevUsage.outputTokens));
   assert.equal(result.mainModelChanged, false);
 
@@ -25,6 +27,7 @@ test("live Luna and Jev adapters return their documented shapes", { skip: !crede
     selectedNames: result.selectedNames,
     interpreterUsage: result.interpreterUsage,
     jevUsage: result.jevUsage,
+    preflight: result.preflight,
     latencyMs: result.latencyMs
   }));
 });
@@ -52,6 +55,33 @@ async function runLiveSmoke(key: string) {
       };
     }
   };
+  let jevProviderError: unknown;
+  const typeSafeClient = adaptTypeSafeClient(new TypeSafeClient({ apiKey: key }));
+  const client: JevClientLike = {
+    systemOne(request, options) {
+      return typeSafeClient.systemOne(request, options).catch(error => {
+        jevProviderError = error;
+        throw error;
+      });
+    }
+  };
+  const preflightContext = "Current request: 直して\nPrevious user request: Fix the keyboard focus bug in the React settings form.";
+  const no = await preflightSkills({
+    client,
+    context: "Current request: つまり……？\nPrevious user request: Fix the keyboard focus bug in the React settings form.",
+    model: DEFAULT_CONFIG.jevModel,
+    timeoutMs: DEFAULT_CONFIG.jevTimeoutMs
+  });
+  const yes = await preflightSkills({
+    client,
+    context: preflightContext,
+    model: DEFAULT_CONFIG.jevModel,
+    timeoutMs: DEFAULT_CONFIG.jevTimeoutMs
+  });
+  if (no.errorCategory || yes.errorCategory) {
+    const detail = jevProviderError ? sanitizeError(jevProviderError, key) : `${no.errorCategory ?? "ok"}/${yes.errorCategory ?? "ok"}`;
+    throw new Error(`Jev preflight smoke request failed (${detail})`);
+  }
   const interpretation = await interpretTask({
     registry: interpreterRegistry,
     modelRef: DEFAULT_CONFIG.interpreterModel,
@@ -65,16 +95,6 @@ async function runLiveSmoke(key: string) {
     throw new Error(`Luna smoke request failed (${detail})`);
   }
 
-  let jevProviderError: unknown;
-  const typeSafeClient = adaptTypeSafeClient(new TypeSafeClient({ apiKey: key }));
-  const client: JevClientLike = {
-    systemOne(request, options) {
-      return typeSafeClient.systemOne(request, options).catch(error => {
-        jevProviderError = error;
-        throw error;
-      });
-    }
-  };
   const classification = await classifySkills({
     client,
     task: interpretation.task,
@@ -106,8 +126,11 @@ async function runLiveSmoke(key: string) {
       outputTokens: classification.usage.outputTokens
     },
     selectedNames: classification.selected.map(item => item.skill.name),
+    preflight: { no, yes },
     models: { interpreter: DEFAULT_CONFIG.interpreterModel, jev: DEFAULT_CONFIG.jevModel },
     latencyMs: {
+      preflightNo: no.latencyMs,
+      preflightYes: yes.latencyMs,
       interpreter: interpretation.latencyMs,
       jev: classification.latencyMs,
       total: performance.now() - startedAt

@@ -1,7 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { eligibleSkills, type SkillRecord } from "./registry.js";
 import type { InterpretationResult } from "./interpreter.js";
-import type { ClassificationResult, SkillProbability } from "./jev.js";
+import type { ClassificationResult, PreflightResult, SkillProbability } from "./jev.js";
 import { createSessionMetrics } from "./metrics.js";
 import { loadSkills } from "./loader.js";
 import type { RouterConfig } from "./types.js";
@@ -48,6 +48,7 @@ export interface RouteDetails {
   interpreterFallback: boolean;
   latencyMs: number;
   skippedSkills: string[];
+  skipReason?: "no-skill-needed" | "preflight-failed";
   errorCategory?: string;
 }
 
@@ -64,9 +65,11 @@ export interface RouteResult {
   message?: RouteMessage;
   interpretation?: InterpretationResult;
   classification?: ClassificationResult;
+  preflight?: PreflightResult;
 }
 
 export interface RouterOptions {
+  preflight?: (input: AutomaticRouteInput) => Promise<PreflightResult>;
   classifier: (input: RouterClassificationInput) => Promise<ClassificationResult>;
   interpreter: (input: RouterInterpreterInput) => Promise<InterpretationResult>;
   readFile: (path: string, maxChars: number) => Promise<string>;
@@ -95,11 +98,13 @@ export function createRouter(options: RouterOptions) {
     );
     let interpretation: InterpretationResult | undefined;
     let classification: ClassificationResult | undefined;
+    let preflight: PreflightResult | undefined;
     let selected: SkillProbability[] = [];
     let content = "";
     let loadedSkills: string[] = [];
     let skippedSkills: string[] = [];
     let errorCategory: string | undefined;
+    let skipReason: RouteDetails["skipReason"];
     let skipped = false;
 
     const finish = (): RouteResult => {
@@ -113,6 +118,7 @@ export function createRouter(options: RouterOptions) {
         interpreterFallback: interpretation?.fallbackUsed ?? false,
         latencyMs: Math.max(0, performance.now() - started),
         skippedSkills,
+        ...(skipReason === undefined ? {} : { skipReason }),
         ...(errorCategory === undefined ? {} : { errorCategory })
       };
       const result: RouteResult = {
@@ -122,12 +128,14 @@ export function createRouter(options: RouterOptions) {
           ? { message: { customType: "jev-skill-router", display: false, content, details } }
           : {}),
         ...(interpretation === undefined ? {} : { interpretation }),
-        ...(classification === undefined ? {} : { classification })
+        ...(classification === undefined ? {} : { classification }),
+        ...(preflight === undefined ? {} : { preflight })
       };
       metrics.recordRoute({
         details,
         ...(interpretation === undefined ? {} : { interpretation }),
         ...(classification === undefined ? {} : { classification }),
+        ...(preflight === undefined ? {} : { preflight }),
         loaderFailures: skippedSkills,
         skipped
       }, input.config.jevPricing);
@@ -146,6 +154,19 @@ export function createRouter(options: RouterOptions) {
 
     let task = userTask;
     if (automatic) {
+      if (options.preflight) {
+        try {
+          preflight = await options.preflight(automaticInput);
+        } catch {
+          preflight = { needed: false, usage: {}, requests: 0, latencyMs: 0, errorCategory: "provider" };
+        }
+        if (!preflight.needed || preflight.errorCategory) {
+          skipped = true;
+          skipReason = preflight.errorCategory ? "preflight-failed" : "no-skill-needed";
+          errorCategory = preflight.errorCategory;
+          return finish();
+        }
+      }
       try {
         interpretation = await options.interpreter({ context, config: input.config, ...(input.signal === undefined ? {} : { signal: input.signal }) });
       } catch {

@@ -1,4 +1,4 @@
-import type { ClassificationResult } from "./jev.js";
+import type { ClassificationResult, PreflightResult } from "./jev.js";
 import type { InterpretationResult } from "./interpreter.js";
 import type { RouterConfig } from "./types.js";
 
@@ -17,6 +17,7 @@ export interface RouteMetricInput {
   details: RouteMetricDetails;
   interpretation?: InterpretationResult;
   classification?: ClassificationResult;
+  preflight?: PreflightResult;
   loaderFailures?: readonly string[];
   skipped?: boolean;
 }
@@ -165,11 +166,13 @@ function recordInto(bucket: MetricBucket, input: RouteMetricInput, pricing?: Rou
     }
   }
 
-  if (classification) {
-    bucket.jevRequests += tokenCount(classification.requests);
-    bucket.jevChunks += classification.requests > 1 ? tokenCount(classification.requests - 1) : 0;
-    bucket.jevLatencyMs += nonnegative(classification.latencyMs);
-    const { inputTokens, outputTokens } = classification.usage;
+  if (classification) bucket.jevChunks += classification.requests > 1 ? tokenCount(classification.requests - 1) : 0;
+  for (const jev of [input.preflight, classification]) {
+    if (!jev) continue;
+    bucket.jevRequests += tokenCount(jev.requests);
+    bucket.jevLatencyMs += nonnegative(jev.latencyMs);
+    if (jev.requests === 0) continue;
+    const { inputTokens, outputTokens } = jev.usage;
     if (inputTokens === undefined) bucket.jevInputTokensAvailable = false;
     else {
       bucket.jevInputTokensObserved = true;

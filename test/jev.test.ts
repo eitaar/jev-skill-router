@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { APIError, APITimeoutError, APIUserAbortError, AuthenticationError, InternalServerError } from "@typesafe-ai/sdk";
 import test from "node:test";
-import { classifySkills } from "../src/jev.js";
+import { classifySkills, preflightSkills } from "../src/jev.js";
 import { fakeJev, makeSkillRecords } from "./helpers.js";
 
 const classify = (client: ReturnType<typeof fakeJev>, names: string[], options: { threshold?: number; topK?: number; chunkSize?: number } = {}) => classifySkills({
@@ -171,4 +171,22 @@ test("does not invent zero Jev token counts when usage is missing", async () => 
   }));
   const result = await classify(jev, ["a"]);
   assert.deepEqual(result.usage, {});
+});
+
+test("preflight asks one Jev question about the current request and fails closed on invalid answers", async () => {
+  const jev = fakeJev((_request, call) => ({
+    answers: { need_skills: { noul: call === 0 ? 0.1 : call === 1 ? 0.8 : "0.9" } },
+    usage: { input_tokens: 3, output_tokens: 1 }
+  }));
+  const input = { client: jev, context: "Current request: つまり？\nPrevious user request: 調べて", model: "jev-latest", timeoutMs: 1000 };
+  const no = await preflightSkills(input);
+  const yes = await preflightSkills({ ...input, context: "Current request: 直して\nPrevious user request: 調べて" });
+  const invalid = await preflightSkills(input);
+  assert.equal(no.needed, false);
+  assert.equal(yes.needed, true);
+  assert.equal(invalid.needed, false);
+  assert.equal(invalid.errorCategory, "malformed");
+  assert.deepEqual(jev.requests[0]?.state, { task: input.context });
+  assert.deepEqual(jev.requests.map(request => Object.keys(request.questions)), [["need_skills"], ["need_skills"], ["need_skills"]]);
+  assert.deepEqual(no.usage, { inputTokens: 3, outputTokens: 1 });
 });

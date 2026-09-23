@@ -35,13 +35,18 @@ interface Harness {
   skills: ReturnType<DefaultResourceLoader["getSkills"]>["skills"];
   session: Awaited<ReturnType<typeof createAgentSession>>["session"];
   requests: JevRequest[];
+  gateRequests: JevRequest[];
   interpreterCalls: Array<{ model: string; reasoning: string | undefined }>;
   piCommands: SlashCommandInfo[];
 }
 
-function fakeJev(requests: JevRequest[], failure?: HarnessOptions["jevFailure"]): JevClientLike {
+function fakeJev(requests: JevRequest[], gateRequests: JevRequest[], failure?: HarnessOptions["jevFailure"]): JevClientLike {
   return {
     async systemOne(request) {
+      if (Object.hasOwn(request.questions, "need_skills")) {
+        gateRequests.push(request);
+        return { answers: { need_skills: { noul: request.state.task.startsWith("Current request: つまり？") ? 0.1 : 0.9 } }, usage: { input_tokens: 2, output_tokens: 1 } };
+      }
       requests.push(request);
       if (failure === "timeout") throw new APITimeoutError(10);
       if (failure === "malformed") return { answers: {}, usage: { input_tokens: 1, output_tokens: 1 } };
@@ -131,6 +136,7 @@ async function makeHarness(t: test.TestContext, options: HarnessOptions = {}): P
   });
 
   const requests: JevRequest[] = [];
+  const gateRequests: JevRequest[] = [];
   let piCommands: SlashCommandInfo[] = [];
   const settingsManager = SettingsManager.inMemory();
   const resourceLoader = new DefaultResourceLoader({
@@ -155,7 +161,7 @@ async function makeHarness(t: test.TestContext, options: HarnessOptions = {}): P
       }) as ExtensionAPI;
       const jevClient = options.jevClient ?? (options.withClient === false
         ? undefined
-        : fakeJev(requests, options.jevFailure));
+        : fakeJev(requests, gateRequests, options.jevFailure));
       registerJevSkillRouter(recordingApi, {
         homeDir,
         ...(jevClient === undefined ? {} : { jevClient })
@@ -182,6 +188,7 @@ async function makeHarness(t: test.TestContext, options: HarnessOptions = {}): P
     skills: resourceLoader.getSkills().skills,
     session,
     requests,
+    gateRequests,
     interpreterCalls,
     piCommands
   };
@@ -206,6 +213,34 @@ function recordMessage(harness: Harness, message: RouteMessage): string {
 function toolText(result: { content: Array<{ type: string; text?: string }> }): string {
   return result.content.flatMap(block => block.type === "text" && block.text ? [block.text] : []).join("\n");
 }
+
+test("Jev preflight skips conversational follow-ups but routes short actionable requests", async t => {
+  const harness = await makeHarness(t, { skillCount: 12, visibleCount: 1 });
+  const no = await beforeAgentStart(harness, "つまり？");
+  assert.equal(no.systemPromptOptions.skills.length, 1);
+  assert.equal(no.messages.length, 0);
+  assert.equal(harness.gateRequests.length, 1);
+  assert.match(harness.gateRequests[0]?.state.task ?? "", /^Current request: つまり？/);
+  assert.equal(harness.interpreterCalls.length, 0);
+  assert.equal(harness.requests.length, 0);
+
+  const yes = await beforeAgentStart(harness, "直して");
+  assert.equal(harness.gateRequests.length, 2);
+  assert.equal(harness.interpreterCalls.length, 1);
+  assert.equal(harness.requests.length, 1);
+  assert.equal(yes.messages[0]?.customType, "jev-skill-router");
+});
+
+test("preflight sends the bounded current request once, even when the prompt exceeds the context limit", async t => {
+  const harness = await makeHarness(t, { skillCount: 12, visibleCount: 1 });
+  await beforeAgentStart(harness, `Fix ${"a".repeat(6000)}`);
+  const gate = harness.gateRequests[0];
+  assert.ok(gate);
+  assert.deepEqual(Object.keys(gate.state), ["task"]);
+  assert.ok(Array.from(gate.state.task).length <= 5000);
+  assert.match(gate.state.task, /^Current request: Fix /);
+  assert.ok(!gate.state.task.includes("a".repeat(6000)));
+});
 
 test("Pi filters only the structured skill section, scans all hidden skills, and keeps native commands and model", async t => {
   const harness = await makeHarness(t);
@@ -269,6 +304,7 @@ test("on-demand tool searches Jev directly and returns the matching native skill
   const result = await tool.execute("test-call", { task: "Improve keyboard accessibility of this React dashboard" } as never, undefined, undefined, harness.session.extensionRunner.createContext());
 
   assert.equal(harness.interpreterCalls.length, 0);
+  assert.equal(harness.gateRequests.length, 0);
   assert.equal(Object.keys(harness.requests[0]?.questions ?? {}).length, 124);
   assert.match(toolText(result), /Body for hidden-010: keyboard accessibility/);
   assert.deepEqual((result.details as { suppliedSkills?: string[] } | undefined)?.suppliedSkills ?? [], ["hidden-010"]);

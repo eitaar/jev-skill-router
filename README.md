@@ -29,7 +29,7 @@ This is an opt-in activation step, separate from building or testing this reposi
 pi install .
 ```
 
-Pi writes the package registration to user settings by default; `pi install -l .` writes project settings. Neither command is needed to run this repository's tests, and installation was not performed as part of implementation.
+Pi writes the package registration to user settings by default; `pi install -l .` writes project settings. Neither command is needed to run this repository's tests.
 
 ## Configuration
 
@@ -69,15 +69,17 @@ Manual-only skills (`disable-model-invocation: true`) are never advertised by th
 ### Automatic route
 
 ```text
-substantive user turn
+nonempty user turn
   -> before_agent_start captures Pi's discovered skills and filters only prompt skill metadata
-  -> Luna interprets bounded active-branch user context with low reasoning
+  -> Jev preflight asks whether the current request needs task-specific skills (recent user context is supporting context)
+  -> no or failure: continue with the main model, without Luna or full skill classification
+  -> yes: Luna interprets bounded active-branch user context with low reasoning
   -> Jev classifies every eligible hidden skill (size-only chunk fallback if needed)
   -> extension reads selected SKILL.md files from canonical Pi registry paths
   -> selected instructions are injected before the main model's first response
 ```
 
-The local file read is performed by the extension; there is no extra filesystem-tool/read round trip before the response. The normal main-model request still happens as usual. Empty/non-substantive requests, zero matches, and routing failures do not add skill instructions.
+The local file read is performed by the extension; there is no extra filesystem-tool/read round trip before the response. The normal main-model request still happens as usual. Empty requests, a negative or failed preflight, zero matches, and routing failures do not add skill instructions. A negative Jev judgment may miss a useful skill; on-demand search and native `/skill:name` remain available.
 
 ### On-demand route
 
@@ -96,7 +98,7 @@ The tool accepts task text, not paths. The returned skill bodies remove the need
 - `/jev-skills status` — effective configuration, registry counts, interpreter/key availability, and last route status.
 - `/jev-skills on` / `/jev-skills off` — enable or disable automatic routing for this session.
 - `/jev-skills debug on` / `/jev-skills debug off` — toggle sanitized UI diagnostics for this session.
-- `/jev-skills test <task>` — dry-run interpretation, classification, and loading without injection or supplied-state mutation.
+- `/jev-skills test <task>` — dry-run preflight and (if positive) interpretation, classification, and loading without injection or supplied-state mutation.
 - `/jev-skills stats` — per-route-kind usage, latency, candidate/evaluation, coverage, error, and cost metrics.
 - `jev_skill_search` — on-demand hidden-skill search for the main model.
 
@@ -112,8 +114,8 @@ Pi preserves its native command collision behavior. If another extension already
 
 ## Privacy, trust, and failure behavior
 
-- Luna receives the bounded current request and up to the configured number of earlier textual user messages from the active branch, plus the project basename and supplied skill names when relevant. Context is capped by `maxContextChars`; assistant messages, tool output, diffs, full compaction text, credentials, and full project paths are not included.
-- Jev receives the interpreted task plus eligible skill names and descriptions. Skill bodies are read locally only after selection and then supplied to the main model.
+- Jev preflight receives the current request and bounded active-branch user context. If affirmative, Luna receives the same bounded context: up to the configured number of earlier textual user messages, plus the project basename and supplied skill names when relevant. Context is capped by `maxContextChars`; assistant messages, tool output, diffs, full compaction text, credentials, and full project paths are not included.
+- Jev full classification receives the interpreted task plus eligible skill names and descriptions. Skill bodies are read locally only after selection and then supplied to the main model.
 - Pi's native discovered registry is the only path authority. The extension never accepts a path from tool input, never edits installed `SKILL.md` files, and applies bounded reads to canonical paths.
 - User/project config follows Pi trust rules. An untrusted project's router configuration is ignored.
 - Cancellation and configured timeouts stop nested requests where supported. Interpreter, Jev, or loader failures degrade without blocking ordinary Pi work; they do not cause arbitrary file reads. Active-branch context is authoritative, so compaction that removes supplied instructions can make a skill eligible again.
@@ -127,7 +129,7 @@ Do not claim token or cost savings without a controlled comparison against an al
 
 Known limitations:
 
-- Each substantive automatic route adds Luna interpretation and at least one Jev request.
+- Every eligible nonempty automatic turn adds one Jev preflight request; affirmative turns also add Luna interpretation and at least one Jev classification request. A negative or failed preflight skips both. The preflight's yes/no threshold is 0.5; this is a judgment, not an accuracy guarantee.
 - Jev currently has lower documented accuracy for CJK than English; Luna normalization can help but does not guarantee cross-language selection.
 - `threshold` and `topK` are tuning values, not accuracy guarantees. No match is valid.
 - A later extension hook may change the prompt skill section after this extension; this package cannot test arbitrary third-party hook ordering.

@@ -111,6 +111,69 @@ test("loader skips missing and oversized files without blocking a valid skill", 
   assert.ok(!result.content.includes("filesystem detail"));
 });
 
+test("a conversational follow-up skips Luna and full Jev scanning after one negative preflight", async () => {
+  const router = createRouter({
+    preflight: async input => {
+      assert.equal(input.currentPrompt, "つまり？");
+      return { needed: false, probability: 0.1, usage: { inputTokens: 3, outputTokens: 1 }, requests: 1, latencyMs: 2 };
+    },
+    classifier: async () => { throw new Error("full scan must not run"); },
+    interpreter: async () => { throw new Error("Luna must not run"); },
+    readFile: async () => { throw new Error("must not read skills"); }
+  });
+  const result = await router.routeAutomatic(makeAutomaticRouteInput({
+    registry: makeSkillRecords(["research"]),
+    currentPrompt: "つまり？",
+    context: "Current request: つまり？\nPrevious user request: Research the API"
+  }));
+  assert.equal(result.message, undefined);
+  assert.equal(result.details.skipReason, "no-skill-needed");
+  assert.equal(router.metrics.snapshot().jevRequests, 1);
+  assert.deepEqual(router.metrics.snapshot().jevTokens, { input: 3, output: 1 });
+});
+
+test("a failed preflight fails closed without calling Luna or full classification", async () => {
+  const router = createRouter({
+    preflight: async () => ({ needed: false, usage: {}, requests: 1, latencyMs: 2, errorCategory: "timeout" }),
+    classifier: async () => { throw new Error("full scan must not run"); },
+    interpreter: async () => { throw new Error("Luna must not run"); },
+    readFile: async () => { throw new Error("must not read skills"); }
+  });
+  const result = await router.routeAutomatic(makeAutomaticRouteInput({ registry: makeSkillRecords(["research"]), currentPrompt: "Fix this" }));
+  assert.equal(result.message, undefined);
+  assert.equal(result.details.skipReason, "preflight-failed");
+  assert.equal(result.details.errorCategory, "timeout");
+  assert.equal(router.metrics.snapshot().jevRequests, 1);
+});
+
+test("a short actionable request proceeds from preflight through Luna and the full skill scan", async () => {
+  const [skill] = makeSkillRecords(["diagnosing-bugs"]);
+  assert.ok(skill);
+  let gateCalls = 0;
+  const router = createRouter({
+    preflight: async input => {
+      gateCalls++;
+      assert.equal(input.currentPrompt, "直して");
+      return { needed: true, probability: 0.8, usage: { inputTokens: 3, outputTokens: 1 }, requests: 1, latencyMs: 2 };
+    },
+    interpreter: async input => {
+      assert.match(input.context, /Previous user request: Fix the bug/);
+      return { task: "Fix the bug", fallbackUsed: false, attempts: 1, latencyMs: 2 };
+    },
+    classifier: async input => {
+      assert.equal(input.task, "Fix the bug");
+      return classification(input.skills, [skill.name]);
+    },
+    readFile: async () => "Bug diagnosis instructions"
+  });
+  const result = await router.routeAutomatic(makeAutomaticRouteInput({
+    registry: [skill], currentPrompt: "直して", context: "Current request: 直して\nPrevious user request: Fix the bug"
+  }));
+  assert.equal(gateCalls, 1);
+  assert.match(result.message?.content ?? "", /Bug diagnosis instructions/);
+  assert.equal(router.metrics.snapshot().jevRequests, 2);
+});
+
 test("automatic zero match injects no message", async () => {
   const router = createRouter({
     classifier: async input => classification(input.skills, []),
@@ -132,6 +195,7 @@ test("on-demand loads selected content without invoking the interpreter", async 
   const router = createRouter({
     classifier: async input => classification(input.skills, [skill.name]),
     interpreter: async () => { interpreterCalls++; throw new Error("must not run"); },
+    preflight: async () => { throw new Error("preflight must not run on demand"); },
     readFile: async () => "# Skill body"
   });
   const result = await router.routeOnDemand(makeOnDemandRouteInput({
