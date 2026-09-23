@@ -178,7 +178,9 @@ export function createRouter(options: RouterOptions) {
           errorCategory: "provider"
         };
       }
-      task = interpretation.task;
+      task = interpretation.priority
+        ? `User priority: ${interpretation.priority}\nTask: ${interpretation.task}`
+        : interpretation.task;
       if (interpretation.fallbackUsed && interpretation.errorCategory) errorCategory = interpretation.errorCategory;
     }
 

@@ -9,7 +9,7 @@ Pi still discovers native skills and keeps `/skill:name` commands. The router ad
 
 ## Find guidance for a task
 
-If the current instructions do not cover a specialized task, call `jev_skill_search` with a **concise task intent**, not a file path or the full conversation. The result contains selected trusted `SKILL.md` bodies; follow the relevant instructions. A no-match or provider failure means continue with current instructions, or use `/skill:name` when a specific skill is known. Simple conversational follow-ups need no search. On-demand search bypasses Luna and remains available when automatic routing is off.
+If a concrete step of the current task lacks guidance, call `jev_skill_search` with a **narrow unmet subtask** (for example, "verify keyboard behavior in this web app"), not the whole task, a file path, or the full conversation. The result contains selected trusted `SKILL.md` bodies; follow the relevant instructions. A no-match or provider failure means continue with current instructions, or use `/skill:name` when a specific skill is known. Simple conversational follow-ups need no search. On-demand search bypasses Luna and remains available when automatic routing is off.
 
 ## Inspect and control
 

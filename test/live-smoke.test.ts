@@ -68,7 +68,7 @@ async function runLiveSmoke(key: string) {
   const preflightContext = "Current request: 直して\nPrevious user request: Fix the keyboard focus bug in the React settings form.";
   const no = await preflightSkills({
     client,
-    context: "Current request: つまり……？\nPrevious user request: Fix the keyboard focus bug in the React settings form.",
+    context: "Current request: ありがとう、以上です。新たな作業はありません。\nPrevious user request: Fix the keyboard focus bug in the React settings form.",
     model: DEFAULT_CONFIG.jevModel,
     timeoutMs: DEFAULT_CONFIG.jevTimeoutMs
   });

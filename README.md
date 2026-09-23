@@ -73,8 +73,8 @@ nonempty user turn
   -> before_agent_start captures Pi's discovered skills and filters only prompt skill metadata
   -> Jev preflight asks whether the current request needs task-specific skills (recent user context is supporting context)
   -> no or failure: continue with the main model, without Luna or full skill classification
-  -> yes: Luna interprets bounded active-branch user context with low reasoning
-  -> Jev classifies every eligible hidden skill (size-only chunk fallback if needed)
+  -> yes: Luna summarizes bounded active-branch user context and any explicitly emphasized priority with low reasoning
+  -> Jev classifies every eligible hidden skill using both (size-only chunk fallback if needed)
   -> extension reads selected SKILL.md files from canonical Pi registry paths
   -> selected instructions are injected before the main model's first response
 ```
@@ -91,7 +91,7 @@ main model calls jev_skill_search(task)
   -> main model continues with the result
 ```
 
-The tool accepts task text, not paths. The returned skill bodies remove the need for a separate file-read tool call; as with any tool call, Pi makes the normal subsequent model request. Native `/skill:name` commands are unchanged.
+The tool accepts task text, not paths. Search for a narrow unmet subtask (for example, browser-testing a ToDo app), not the entire project; broad tasks can match generic guidance. The returned skill bodies remove the need for a separate file-read tool call; as with any tool call, Pi makes the normal subsequent model request. Native `/skill:name` commands are unchanged.
 
 ## Commands
 
@@ -115,7 +115,7 @@ Pi preserves its native command collision behavior. If another extension already
 ## Privacy, trust, and failure behavior
 
 - Jev preflight receives the current request and bounded active-branch user context. If affirmative, Luna receives the same bounded context: up to the configured number of earlier textual user messages, plus the project basename and supplied skill names when relevant. Context is capped by `maxContextChars`; assistant messages, tool output, diffs, full compaction text, credentials, and full project paths are not included.
-- Jev full classification receives the interpreted task plus eligible skill names and descriptions. Skill bodies are read locally only after selection and then supplied to the main model.
+- Jev full classification receives the interpreted task, any explicitly emphasized priority, and eligible skill names and descriptions. Skill bodies are read locally only after selection and then supplied to the main model.
 - Pi's native discovered registry is the only path authority. The extension never accepts a path from tool input, never edits installed `SKILL.md` files, and applies bounded reads to canonical paths.
 - User/project config follows Pi trust rules. An untrusted project's router configuration is ignored.
 - Cancellation and configured timeouts stop nested requests where supported. Interpreter, Jev, or loader failures degrade without blocking ordinary Pi work; they do not cause arbitrary file reads. Active-branch context is authoritative, so compaction that removes supplied instructions can make a skill eligible again.

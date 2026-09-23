@@ -145,14 +145,15 @@ test("passes the configured timeout and cancellation signal to TypeSafe", async 
   assert.equal(jev.calls[0]!.options?.signal, controller.signal);
 });
 
-test("sends only normalized task state and includes canonical skill metadata in each question", async () => {
+test("routing asks whether a skill helps a stated goal or task step, without domain restrictions", async () => {
   const jev = fakeJev(() => ({ answers: {}, usage: { input_tokens: 1, output_tokens: 1 }, model: "jev-latest" }));
-  await classify(jev, ["frontend-design"]);
-  assert.deepEqual(jev.requests[0]!.state, { task: "このReact画面をもっと綺麗にして" });
+  const task = "Build a responsive accessible ToDo app with localStorage and verify it";
+  await classifySkills({ client: jev, task, skills: makeSkillRecords(["frontend-design"]), threshold: 0.65, topK: 3, model: "jev-latest", timeoutMs: 1000, chunkSize: 50 });
+  assert.deepEqual(jev.requests[0]!.state, { task });
   assert.deepEqual(jev.requests[0]!.questions.skill_0000!.instructions, {
     skill: "frontend-design",
     description: "Instructions for frontend-design",
-    criterion: "Does this skill supply instructions directly useful for completing the task?"
+    criterion: "Will this skill materially help a stated goal or required step of THIS task, especially an explicit user priority? No for generic advice or unmet prerequisites. Plan execution needs an existing plan; language/framework-specific skills need that stack stated."
   });
 });
 

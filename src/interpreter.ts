@@ -1,7 +1,8 @@
 import type { Api, AssistantMessage, Context, Model, SimpleStreamOptions, Usage } from "@earendil-works/pi-ai";
 
-const SYSTEM_PROMPT = "Describe the user's task as a concise, standalone task description. Do not name or recommend skills. Return only JSON with a required task string and an optional domain string.";
+const SYSTEM_PROMPT = "Summarize the CURRENT user's task as JSON with a required task string and optional priority string. Preserve the requested action, relevant constraints, and any explicitly emphasized goal or requirement, regardless of subject. Set priority only when the user clearly emphasizes one; quote its substance without adding inferred priorities. Do not name or recommend skills.";
 const MAX_TASK_CHARS = 1000;
+const MAX_PRIORITY_CHARS = 300;
 const MAX_OUTPUT_TOKENS = 256;
 
 type InterpreterErrorCategory = "model-unavailable" | "timeout" | "cancelled" | "malformed" | "provider";
@@ -16,6 +17,7 @@ export interface InterpreterRegistry {
 export interface InterpretationResult {
   task: string;
   domain?: string;
+  priority?: string;
   fallbackUsed: boolean;
   attempts: number;
   latencyMs: number;
@@ -37,7 +39,7 @@ class InterpreterFailure extends Error {
   }
 }
 
-function parseInterpretation(text: string): { task: string; domain?: string } | undefined {
+function parseInterpretation(text: string): { task: string; domain?: string; priority?: string } | undefined {
   const trimmed = text.trim();
   const fence = /^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i.exec(trimmed);
   const json = fence?.[1] ?? trimmed;
@@ -49,9 +51,13 @@ function parseInterpretation(text: string): { task: string; domain?: string } | 
     if (typeof taskValue !== "string" || !taskValue.trim()) return undefined;
     const task = Array.from(taskValue.trim()).slice(0, MAX_TASK_CHARS).join("");
     const domainValue = (parsed as { domain?: unknown }).domain;
-    return typeof domainValue === "string" && domainValue.trim()
+    const priorityValue = (parsed as { priority?: unknown }).priority;
+    const result = typeof domainValue === "string" && domainValue.trim()
       ? { task, domain: domainValue.trim() }
       : { task };
+    return typeof priorityValue === "string" && priorityValue.trim()
+      ? { ...result, priority: Array.from(priorityValue.trim()).slice(0, MAX_PRIORITY_CHARS).join("") }
+      : result;
   } catch {
     return undefined;
   }

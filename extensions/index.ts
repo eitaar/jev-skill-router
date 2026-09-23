@@ -254,9 +254,9 @@ export function registerJevSkillRouter(pi: ExtensionAPI, options: JevSkillRouter
   pi.registerTool({
     name: "jev_skill_search",
     label: "Jev Skill Search",
-    description: "Search hidden Pi skills for a concise task intent and return relevant trusted SKILL.md instructions in this tool result. No match is valid.",
-    promptSnippet: "Search hidden Pi skills when the current instructions are insufficient",
-    promptGuidelines: ["Use jev_skill_search with a concise task intent when a useful hidden skill may exist; it returns selected instructions directly."],
+    description: "Search hidden Pi skills for a specific unmet step of the current task; returns trusted SKILL.md instructions. No match is valid.",
+    promptSnippet: "Search hidden Pi skills only when a concrete task step lacks guidance",
+    promptGuidelines: ["Use jev_skill_search for a narrow unmet subtask, not the whole task or guidance already supplied; it returns selected instructions directly."],
     parameters: Type.Object({ task: Type.String({ minLength: 1, maxLength: 1000 }) }),
     async execute(_id, params, signal, _update, ctx) {
       const task = params.task.trim();

@@ -301,6 +301,8 @@ test("on-demand tool searches Jev directly and returns the matching native skill
   await beforeAgentStart(harness, "");
   const tool = harness.session.getToolDefinition("jev_skill_search");
   assert.ok(tool);
+  assert.match(tool.description, /specific unmet step/);
+  assert.ok(tool.promptGuidelines?.some(guideline => guideline.includes("narrow unmet subtask")));
   const result = await tool.execute("test-call", { task: "Improve keyboard accessibility of this React dashboard" } as never, undefined, undefined, harness.session.extensionRunner.createContext());
 
   assert.equal(harness.interpreterCalls.length, 0);

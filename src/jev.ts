@@ -161,7 +161,7 @@ export async function classifySkills(input: ClassifySkillsInput): Promise<Classi
   const questions = Object.fromEntries(candidates.map(({ skill, key }) => [key, noul({
     skill: skill.name,
     description: skill.description,
-    criterion: "Does this skill supply instructions directly useful for completing the task?"
+    criterion: "Will this skill materially help a stated goal or required step of THIS task, especially an explicit user priority? No for generic advice or unmet prerequisites. Plan execution needs an existing plan; language/framework-specific skills need that stack stated."
   })]));
   const scores: SkillProbability[] = [];
   let evaluatedCount = 0;

@@ -14,6 +14,27 @@ test("uses exact Luna model at low reasoning without changing the main model", a
   assert.deepEqual(activeModel, { provider: "openai-codex", id: "gpt-6-sol" });
 });
 
+test("preserves emphasized goals across unrelated domains without keyword-specific guidance", async () => {
+  for (const [context, task, priority] of [
+    ["Build a ToDo app; visual design matters most", "Build a ToDo app", "Visual design matters most"],
+    ["Build a login endpoint; prevent token replay above all", "Build a login endpoint", "Prevent token replay"],
+    ["Optimize queries; keep p95 below 50ms before adding features", "Optimize queries", "Keep p95 below 50ms"]
+  ] as const) {
+    const registry = fakeInterpreterRegistry([fakeAssistant(JSON.stringify({ task, priority }))]);
+    const result = await interpretTask({ registry, modelRef: "openai-codex/gpt-6-luna", context, timeoutMs: 1000 });
+    assert.equal(result.task, task);
+    assert.equal(result.priority, priority);
+    assert.match(registry.calls[0]!.context.systemPrompt ?? "", /regardless of subject/);
+    assert.doesNotMatch(registry.calls[0]!.context.systemPrompt ?? "", /重視|重点|prioritize|especially|UI\/UX/i);
+  }
+});
+
+test("omits blank priorities rather than inventing one", async () => {
+  const registry = fakeInterpreterRegistry([fakeAssistant('{"task":"Implement a REST API","priority":"   "}')]);
+  const result = await interpretTask({ registry, modelRef: "openai-codex/gpt-6-luna", context: "Implement a REST API", timeoutMs: 1000 });
+  assert.equal(result.priority, undefined);
+});
+
 test("does not select an arbitrary model when Luna resolution is ambiguous", async () => {
   const registry = fakeInterpreterRegistry([fakeAssistant('{"task":"must not be used"}')]);
   const model = registry.getAvailable()[0]!;

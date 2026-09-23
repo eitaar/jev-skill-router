@@ -174,6 +174,27 @@ test("a short actionable request proceeds from preflight through Luna and the fu
   assert.equal(router.metrics.snapshot().jevRequests, 2);
 });
 
+test("automatic classification retains emphasized goals in any domain alongside the task", async () => {
+  for (const [name, task, priority] of [
+    ["frontend-design", "Build a ToDo app", "Visual hierarchy matters most"],
+    ["security-review", "Build a login endpoint", "Prevent token replay"],
+    ["performance-tuning", "Optimize queries", "Keep p95 below 50ms"]
+  ] as const) {
+    const [skill] = makeSkillRecords([name]);
+    assert.ok(skill);
+    const router = createRouter({
+      interpreter: async () => ({ task, priority, fallbackUsed: false, attempts: 1, latencyMs: 2 }),
+      classifier: async input => {
+        assert.equal(input.task, `User priority: ${priority}\nTask: ${task}`);
+        return classification(input.skills, [skill.name]);
+      },
+      readFile: async () => "Relevant instructions"
+    });
+    const result = await router.routeAutomatic(makeAutomaticRouteInput({ registry: [skill], currentPrompt: task }));
+    assert.deepEqual(result.details.suppliedSkills, [name]);
+  }
+});
+
 test("automatic zero match injects no message", async () => {
   const router = createRouter({
     classifier: async input => classification(input.skills, []),
