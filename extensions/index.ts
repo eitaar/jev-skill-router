@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { basename } from "node:path";
 import { AuthenticationError, TypeSafeClient } from "@typesafe-ai/sdk";
 import { Type } from "typebox";
+import { formatSkillsForPrompt, type Skill } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { loadConfig } from "../src/config.js";
 import { collectInterpretationContext } from "../src/context.js";
@@ -19,6 +20,13 @@ export interface JevSkillRouterOptions {
 }
 
 type Router = ReturnType<typeof createRouter>;
+const SKILLS_SECTION_PATTERN = /The following skills provide specialized instructions for specific tasks\.[\s\S]*?<\/available_skills>/;
+
+function rewriteForcedSkillSection(prompt: string | undefined, skills: Skill[]): string | undefined {
+  if (prompt === undefined) return undefined;
+  const next = prompt.replace(SKILLS_SECTION_PATTERN, () => formatSkillsForPrompt(skills).trimStart());
+  return next === prompt ? undefined : next;
+}
 
 function textResult(text: string, details: unknown = {}): { content: [{ type: "text"; text: string }]; details: unknown } {
   return { content: [{ type: "text", text }], details };
@@ -243,9 +251,16 @@ export function registerJevSkillRouter(pi: ExtensionAPI, options: JevSkillRouter
       const visibility = resolveVisibleSkills(registry, effective.config.visibleSkills);
       warnUnknownVisibleSkills(ctx, visibility.unknownNames);
       event.systemPromptOptions.skills = filterVisible(registry, visibility.visibleNames);
-      if (visibility.fallbackToNative || !effective.config.enabled || !effective.config.autoRouting || !isSubstantive(event.prompt)) return;
+      const systemPrompt = visibility.fallbackToNative ? undefined : rewriteForcedSkillSection(
+        event.systemPromptOptions.forceSystemPrompt,
+        event.systemPromptOptions.skills
+      );
+      if (visibility.fallbackToNative || !effective.config.enabled || !effective.config.autoRouting || !isSubstantive(event.prompt)) {
+        return systemPrompt === undefined ? undefined : { systemPrompt };
+      }
       const result = await runRoute(ctx, event.prompt, "automatic", ctx.signal, effective);
-      return result?.message ? { message: result.message } : undefined;
+      if (result?.message) return systemPrompt === undefined ? { message: result.message } : { message: result.message, systemPrompt };
+      return systemPrompt === undefined ? undefined : { systemPrompt };
     } catch {
       return undefined;
     }

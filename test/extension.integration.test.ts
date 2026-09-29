@@ -28,6 +28,8 @@ interface HarnessOptions {
   jevClient?: JevClientLike;
   jevFailure?: "malformed" | "timeout";
   withClient?: boolean;
+  priorPromptOverride?: boolean;
+  skillDescriptions?: Record<string, string>;
 }
 
 interface Harness {
@@ -82,7 +84,8 @@ async function makeHarness(t: test.TestContext, options: HarnessOptions = {}): P
     const directory = join(skillsDir, name);
     await mkdir(directory, { recursive: true });
     const manual = options.manualOnly?.includes(Number(name.slice(-3))) ? "disable-model-invocation: true\n" : "";
-    await writeFile(join(directory, "SKILL.md"), `---\nname: ${name}\ndescription: Instructions for ${name}\n${manual}---\nBody for ${name}: keyboard accessibility and React dashboard guidance.\n`);
+    const description = options.skillDescriptions?.[name] ?? `Instructions for ${name}`;
+    await writeFile(join(directory, "SKILL.md"), `---\nname: ${name}\ndescription: ${JSON.stringify(description)}\n${manual}---\nBody for ${name}: keyboard accessibility and React dashboard guidance.\n`);
   }));
   await writeFile(join(configDir, "jev-skill-router.json"), JSON.stringify({
     visibleSkills: options.visibleSkills ?? skillNames.slice(0, visibleCount),
@@ -149,6 +152,7 @@ async function makeHarness(t: test.TestContext, options: HarnessOptions = {}): P
     noPromptTemplates: true,
     noThemes: true,
     extensionFactories: [pi => {
+      if (options.priorPromptOverride) pi.on("before_agent_start", event => ({ systemPrompt: `${event.systemPrompt}\nPRIOR_PROMPT_MARKER` }));
       const recordingApi = new Proxy(pi, {
         get(target, property, receiver) {
           if (property === "getCommands") return () => {
@@ -254,6 +258,40 @@ test("Pi filters only the structured skill section, scans all hidden skills, and
   assert.equal(result.messages[0]?.customType, "jev-skill-router");
   assert.equal(harness.interpreterCalls.length, 1);
   assert.equal(harness.interpreterCalls[0]?.reasoning, "low");
+});
+
+test("a prior prompt override still sends only visible skills to the model", async t => {
+  const harness = await makeHarness(t, { skillCount: 12, visibleCount: 1, priorPromptOverride: true });
+  const skipped = await beforeAgentStart(harness, "つまり？");
+  assert.equal(skipped.messages.length, 0);
+  assert.match(skipped.systemPromptOptions.forceSystemPrompt ?? "", /PRIOR_PROMPT_MARKER/);
+  assert.doesNotMatch(skipped.systemPromptOptions.forceSystemPrompt ?? "", /<name>hidden-001<\/name>/);
+
+  const result = await beforeAgentStart(harness, "Improve keyboard accessibility of the dashboard");
+  const sent = result.systemPromptOptions.forceSystemPrompt;
+  assert.ok(sent);
+  assert.deepEqual(result.systemPromptOptions.skills.map(skill => skill.name), ["hidden-000"]);
+  assert.match(sent, /PRIOR_PROMPT_MARKER/);
+  assert.match(sent, /<name>hidden-000<\/name>/);
+  assert.doesNotMatch(sent, /<name>hidden-001<\/name>/);
+  assert.equal(result.messages[0]?.customType, "jev-skill-router");
+});
+
+test("forced skill rewrite keeps dollar sequences in skill descriptions", async t => {
+  const description = "echo $$ and $& and $'pid' and $` and $1";
+  const harness = await makeHarness(t, {
+    skillCount: 12,
+    visibleCount: 1,
+    priorPromptOverride: true,
+    skillDescriptions: { "hidden-000": description }
+  });
+  const skipped = await beforeAgentStart(harness, "つまり？");
+  const sent = skipped.systemPromptOptions.forceSystemPrompt ?? "";
+  assert.match(sent, /PRIOR_PROMPT_MARKER/);
+  assert.match(sent, /<name>hidden-000<\/name>/);
+  assert.equal(sent.includes("$$"), true);
+  assert.equal(sent.includes("$&apos;pid&apos;"), true);
+  assert.doesNotMatch(sent, /<name>hidden-001<\/name>/);
 });
 
 test("an all-unknown visible list keeps the native catalog, skips automatic routing, and warns safely", async t => {
