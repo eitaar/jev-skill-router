@@ -140,7 +140,7 @@ Known limitations:
 
 ## Attribution
 
-This project independently adapts MIT-licensed concepts from TheoOliveira's [`pi-jev`](https://github.com/TheoOliveira/pi-jev). It replaces `pi-jev`'s lexical 12-skill shortlist and older response parsing with full-scan classification using Pi's native TypeSafe classifier API. No source was copied wholesale.
+This project independently adapts MIT-licensed concepts from TheoOliveira's [`pi-jev`](https://github.com/TheoOliveira/pi-jev). It replaces `pi-jev`'s lexical 12-skill shortlist and older response parsing with full-scan classification using Pi's native TypeSafe classifier API. No source was copied wholesale. The upstream copyright and MIT license are preserved in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Development verification
 
