@@ -413,13 +413,13 @@ test("loader deduplicates repeated selected skills", async () => {
 
 test("metrics omit Jev estimates when the provider omits token counts", async () => {
   const jev = fakeJev(({ questions }) => ({
-    answers: Object.fromEntries(Object.keys(questions).map(key => [key, { noul: 0.9 }])),
+    answers: Object.fromEntries(Object.keys(questions).map(key => [key, { type: "bool", probability: 0.9 }])),
     model: "jev-latest"
   }));
   const skill = makeSkillRecords(["unmetered-skill"])[0]!;
   const router = createRouter({
     classifier: input => classifySkills({
-      client: jev,
+      registry: jev,
       task: input.task,
       skills: input.skills,
       threshold: input.config.threshold,

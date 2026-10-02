@@ -1,23 +1,23 @@
 # Jev Skill Router
 
-A Pi 0.87.1-compatible extension that limits the skill metadata advertised to the main model and semantically supplies relevant hidden skill instructions. It preserves Pi's native skill discovery, `/skill:name` commands, and trusted paths.
+A Pi 1.0-compatible extension that limits the skill metadata advertised to the main model and semantically supplies relevant hidden skill instructions. It preserves Pi's native skill discovery, `/skill:name` commands, and trusted paths.
 
 ## Requirements
 
-- Pi 0.87.1 (the 0.87.0 bundled model catalog does not include the default `openai-codex/gpt-6-luna`).
-- Node.js 20 or newer for this package. The `@earendil-works/pi-coding-agent@0.87.0` package used for compatibility testing declares Node.js `>=22.19.0`; use the stricter minimum declared by your Pi installation.
+- Pi 1.0.0 or newer. Older Pi versions are not supported.
+- Node.js 22.19.0 or newer.
 - A configured Pi `openai-codex/gpt-6-luna` model for interpretation and a TypeSafe API key for Jev classification.
 
 ## Setup
 
-Set `TYPESAFE_API_KEY` in the environment used to launch Pi. Do not put it in router configuration or commit it.
+Authenticate the `typesafe` provider through Pi (`/login`) or set `TYPESAFE_API_KEY` in the environment used to launch Pi. Both preflight and skill classification use Pi's native `ctx.modelRegistry.classify()`; there is no separate TypeSafe SDK client. Keep credentials in Pi's authentication store or environment, never router configuration or git.
 
 ```sh
 # Replace the placeholder using your secret manager or shell's secure environment setup.
 export TYPESAFE_API_KEY="<your Typesafe API key>"
 ```
 
-On Windows PowerShell, set `$env:TYPESAFE_API_KEY` in the Pi process environment. Luna uses Pi's normal provider authentication separately from this TypeSafe key. Configure the `openai-codex` provider with Pi's usual auth flow; the router never changes the active main model or thinking level.
+On Windows PowerShell, set `$env:TYPESAFE_API_KEY` in the Pi process environment. Luna and Jev both use Pi's normal provider authentication; the router does not require an environment key when Pi already has usable TypeSafe credentials. Configure the `openai-codex` provider with Pi's usual auth flow; the router never changes the active main model or thinking level.
 
 Copy `jev-skill-router.example.json` to `~/.pi/agent/jev-skill-router.json` and replace the placeholder skill name with a normally advertisable skill you want to keep visible. A trusted project may instead use `.pi/jev-skill-router.json`; trusted project values override the user configuration. Session command overrides do not write configuration files.
 
@@ -48,7 +48,7 @@ The user file is `~/.pi/agent/jev-skill-router.json`. Project configuration is r
 | `maxContextChars` | `5000` | Integer from 1 to 100,000; total interpretation context limit. |
 | `interpreterTimeoutMs` | `15000` | Integer from 1 to 120,000. |
 | `jevTimeoutMs` | `15000` | Integer from 1 to 120,000. |
-| `jevModel` | `"jev-latest"` | Non-empty Jev model ID. |
+| `jevModel` | `"jev-latest"` | Non-empty classifier model ID on Pi's `typesafe` provider. |
 | `debug` | `false` | Boolean; enables compact sanitized route diagnostics in the UI. |
 | `jevChunkSize` | `50` | Integer from 1 to 500; only used after a request-size rejection. |
 | `maxSkillChars` | `50000` | Integer from 1 to 1,000,000; per-file loading limit. |
@@ -95,7 +95,7 @@ The tool accepts task text, not paths. Search for a narrow unmet subtask (for ex
 
 ## Commands
 
-- `/jev-skills status` — effective configuration, registry counts, interpreter/key availability, and last route status.
+- `/jev-skills status` — effective configuration, registry counts, interpreter/classifier availability, and last route status.
 - `/jev-skills on` / `/jev-skills off` — enable or disable automatic routing for this session.
 - `/jev-skills debug on` / `/jev-skills debug off` — toggle sanitized UI diagnostics for this session.
 - `/jev-skills test <task>` — dry-run preflight and (if positive) interpretation, classification, and loading without injection or supplied-state mutation.
@@ -106,11 +106,13 @@ Pi preserves its native command collision behavior. If another extension already
 
 ## Authentication and troubleshooting
 
-- `/jev-skills status` reports whether the exact interpreter model is available and whether `TYPESAFE_API_KEY` is present; it never displays the key.
-- If Luna is unavailable, use Pi 0.87.1 or newer, verify the model registry includes exactly `openai-codex/gpt-6-luna`, and authenticate the `openai-codex` provider through Pi. The router uses a side-call and does not call `pi.setModel()` or change thinking level.
-- If Jev reports authentication failure, make sure the Pi process inherited `TYPESAFE_API_KEY`, then restart Pi after changing the environment.
-- The smoke test is credential-gated: `npm run smoke`. It contacts the real Luna and Jev adapters only when the TypeSafe key is set and prints model IDs, selected synthetic skill names, token counts, and latency—not prompts, API keys, or skill bodies.
-- Jev full-scan is attempted first. Only an explicit request-size error triggers configured chunking; authentication, cancellation, timeouts, and generic provider failures are not treated as size errors.
+- `/jev-skills status` reports the exact interpreter and classifier availability using Pi's model registry and authentication; it never displays credentials.
+- If Luna is unavailable, verify that your configured `interpreterModel` exists in Pi's model registry and authenticate its provider through Pi. The router uses a side-call and does not call `pi.setModel()` or change thinking level.
+- If Jev reports authentication failure, authenticate the `typesafe` provider through Pi or make sure the Pi process inherited `TYPESAFE_API_KEY`. Restart Pi after changing the environment.
+- The smoke suite is credential-gated: `npm run smoke`. With `TYPESAFE_API_KEY` set, it calls real Luna/Jev services and runs isolated Pi SDK sessions for automatic supply and a model-issued `jev_skill_search`. It uses synthetic skills, no filesystem tools, temporary configuration and in-memory sessions/credentials; normal Pi settings are not written. This incurs provider usage. Output includes model IDs, selected fixture names, token counts and latency—not credentials or skill bodies.
+- Jev full-scan is attempted first. Pi's automatic classifier retries are disabled (`maxRetries: 0`). Only HTTP 413 or HTTP 400/422 with explicit request/question-size text triggers configured chunking; authentication, cancellation, timeouts, and generic provider failures do not.
+- Pi v1 returns classifier errors as text, not structured HTTP status. Size detection and detailed error categories conservatively recognize Pi's current error format; unrecognized errors fail safely without chunking. These heuristics need revisiting if Pi changes that format.
+- A missing, wrong-type, or invalid probability rejects that entire classification request. Previously completed valid chunks remain usable; no answers from the malformed chunk are supplied.
 
 ## Privacy, trust, and failure behavior
 
@@ -123,13 +125,13 @@ Pi preserves its native command collision behavior. If another extension already
 
 ## Metrics and limitations
 
-`/jev-skills stats` breaks down automatic, on-demand, and dry-run routes separately, including provider usage, latency, candidate/evaluation counts, complete/partial/none coverage, no-match and loader counts, and error categories. Provider-returned usage is labeled **measured**. Interpreter provider-reported cost is measured. Jev cost is omitted unless explicit `jevPricing` is configured; that cost is labeled **estimated**. Missing usage is not invented, and the main model's own usage remains Pi's accounting.
+`/jev-skills stats` breaks down automatic, on-demand, and dry-run routes separately, including provider usage, latency, candidate/evaluation counts, complete/partial/none coverage, no-match and loader counts, and error categories. Provider-returned usage is labeled **measured**. Interpreter provider-reported cost is measured. Jev cost is omitted unless explicit `jevPricing` is configured; that cost is labeled **estimated**. Absent usage remains unavailable. Jev token counts follow Pi's normalized native usage (Pi may normalize missing individual counts to zero). Billed usage returned with malformed answers is still counted. The main model's own usage remains Pi's accounting.
 
 Do not claim token or cost savings without a controlled comparison against an all-skills-visible baseline using identical tasks and accounting for the main model, Luna, Jev, and any additional main-model tool turns.
 
 Known limitations:
 
-- Every eligible nonempty automatic turn adds one Jev preflight request; affirmative turns also add Luna interpretation and at least one Jev classification request. A negative or failed preflight skips both. The preflight's yes/no threshold is 0.5; this is a judgment, not an accuracy guarantee.
+- Every eligible nonempty automatic turn adds one Jev preflight request; affirmative turns also add Luna interpretation and at least one Jev classification request. A negative or failed preflight skips both. The preflight's yes/no threshold is 0.5; this is a judgment, not an accuracy guarantee. Live verification observed a design/explanation request being judged no-skill-needed; on-demand search remains available when automatic supply misses a useful skill.
 - Jev currently has lower documented accuracy for CJK than English; Luna normalization can help but does not guarantee cross-language selection.
 - `threshold` and `topK` are tuning values, not accuracy guarantees. No match is valid.
 - A later extension hook may change the prompt skill section after this extension; this package cannot test arbitrary third-party hook ordering.
@@ -138,7 +140,7 @@ Known limitations:
 
 ## Attribution
 
-This project independently adapts MIT-licensed concepts from TheoOliveira's [`pi-jev`](https://github.com/TheoOliveira/pi-jev). It replaces `pi-jev`'s lexical 12-skill shortlist and older response parsing with full-scan classification using TypeSafe SDK 0.6 behavior. No source was copied wholesale.
+This project independently adapts MIT-licensed concepts from TheoOliveira's [`pi-jev`](https://github.com/TheoOliveira/pi-jev). It replaces `pi-jev`'s lexical 12-skill shortlist and older response parsing with full-scan classification using Pi's native TypeSafe classifier API. No source was copied wholesale.
 
 ## Development verification
 
@@ -149,4 +151,4 @@ npm run typecheck
 npm run smoke
 ```
 
-`npm test` runs the deterministic unit and integration suite; `npm run smoke` separately runs the credential-gated live test (skipped without `TYPESAFE_API_KEY`). The live test requires the exact Luna model in the installed Pi model registry and fails clearly if it is unavailable. No Pi settings need to be changed to build or test the package.
+`npm test` runs the deterministic unit and integration suite; `npm run smoke` separately runs the credential-gated live suite (skipped without `TYPESAFE_API_KEY`). It requires the configured default Luna model and usable Pi Codex authentication. Successful live checks establish the tested paths at that time, not guaranteed classifier accuracy or future provider availability. No Pi settings need to be changed to build or test the package.

@@ -12,10 +12,9 @@ import {
   type ExtensionAPI,
   type SlashCommandInfo
 } from "@earendil-works/pi-coding-agent";
-import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
-import { APITimeoutError } from "@typesafe-ai/sdk";
+import { createAssistantMessageEventStream, type ClassifierContext } from "@earendil-works/pi-ai";
 import { registerJevSkillRouter } from "../extensions/index.js";
-import type { JevClientLike, JevRequest } from "../src/jev.js";
+import { fakeClassification, fakeUsage, jevModel } from "./helpers.js";
 import type { RouteMessage } from "../src/router.js";
 
 interface HarnessOptions {
@@ -25,9 +24,8 @@ interface HarnessOptions {
   manualOnly?: readonly number[];
   autoRouting?: boolean;
   interpreterModel?: string;
-  jevClient?: JevClientLike;
   jevFailure?: "malformed" | "timeout";
-  withClient?: boolean;
+  withClassifier?: boolean;
   priorPromptOverride?: boolean;
   skillDescriptions?: Record<string, string>;
 }
@@ -36,31 +34,10 @@ interface Harness {
   cwd: string;
   skills: ReturnType<DefaultResourceLoader["getSkills"]>["skills"];
   session: Awaited<ReturnType<typeof createAgentSession>>["session"];
-  requests: JevRequest[];
-  gateRequests: JevRequest[];
+  requests: ClassifierContext[];
+  gateRequests: ClassifierContext[];
   interpreterCalls: Array<{ model: string; reasoning: string | undefined }>;
   piCommands: SlashCommandInfo[];
-}
-
-function fakeJev(requests: JevRequest[], gateRequests: JevRequest[], failure?: HarnessOptions["jevFailure"]): JevClientLike {
-  return {
-    async systemOne(request) {
-      if (Object.hasOwn(request.questions, "need_skills")) {
-        gateRequests.push(request);
-        return { answers: { need_skills: { noul: request.state.task.startsWith("Current request: つまり？") ? 0.1 : 0.9 } }, usage: { input_tokens: 2, output_tokens: 1 } };
-      }
-      requests.push(request);
-      if (failure === "timeout") throw new APITimeoutError(10);
-      if (failure === "malformed") return { answers: {}, usage: { input_tokens: 1, output_tokens: 1 } };
-      return {
-        answers: Object.fromEntries(Object.keys(request.questions).map((key, index) => [key, {
-          type: "noul",
-          noul: index === 0 ? 0.99 : 0.1
-        }])),
-        usage: { input_tokens: 20, output_tokens: 4 }
-      };
-    }
-  };
 }
 
 async function makeHarness(t: test.TestContext, options: HarnessOptions = {}): Promise<Harness> {
@@ -138,8 +115,34 @@ async function makeHarness(t: test.TestContext, options: HarnessOptions = {}): P
     }
   });
 
-  const requests: JevRequest[] = [];
-  const gateRequests: JevRequest[] = [];
+  const requests: ClassifierContext[] = [];
+  const gateRequests: ClassifierContext[] = [];
+  if (options.withClassifier !== false) {
+    modelRuntime.registerProvider("typesafe", {
+      apiKey: "test-typesafe-key",
+      models: [jevModel],
+      classifiers: {
+        "typesafe-system-one": {
+          async classify(_model, request, requestOptions) {
+            assert.equal(requestOptions?.apiKey, "test-typesafe-key");
+            assert.equal(requestOptions?.timeoutMs, 15000);
+            assert.equal(requestOptions?.maxRetries, 0);
+            if (Object.hasOwn(request.questions, "need_skills")) {
+              gateRequests.push(request);
+              return fakeClassification({ answers: { need_skills: { type: "bool", probability: String(request.state.task).startsWith("Current request: つまり？") ? 0.1 : 0.9 } }, usage: fakeUsage(2, 1) });
+            }
+            requests.push(request);
+            if (options.jevFailure === "timeout") return fakeClassification({ stopReason: "error", errorMessage: "Request timed out after 10ms" });
+            if (options.jevFailure === "malformed") return fakeClassification({ stopReason: "error", errorMessage: "System One API did not return an answer for skill_0000", usage: fakeUsage(1, 1) });
+            return fakeClassification({
+              answers: Object.fromEntries(Object.keys(request.questions).map((key, index) => [key, { type: "bool", probability: index === 0 ? 0.99 : 0.1 }])),
+              usage: fakeUsage(20, 4)
+            });
+          }
+        }
+      }
+    });
+  }
   let piCommands: SlashCommandInfo[] = [];
   const settingsManager = SettingsManager.inMemory();
   const resourceLoader = new DefaultResourceLoader({
@@ -163,13 +166,7 @@ async function makeHarness(t: test.TestContext, options: HarnessOptions = {}): P
           return Reflect.get(target, property, receiver);
         }
       }) as ExtensionAPI;
-      const jevClient = options.jevClient ?? (options.withClient === false
-        ? undefined
-        : fakeJev(requests, gateRequests, options.jevFailure));
-      registerJevSkillRouter(recordingApi, {
-        homeDir,
-        ...(jevClient === undefined ? {} : { jevClient })
-      });
+      registerJevSkillRouter(recordingApi, { homeDir });
     }]
   });
   await resourceLoader.reload();
@@ -224,7 +221,7 @@ test("Jev preflight skips conversational follow-ups but routes short actionable 
   assert.equal(no.systemPromptOptions.skills.length, 1);
   assert.equal(no.messages.length, 0);
   assert.equal(harness.gateRequests.length, 1);
-  assert.match(harness.gateRequests[0]?.state.task ?? "", /^Current request: つまり？/);
+  assert.match(String(harness.gateRequests[0]?.state.task ?? ""), /^Current request: つまり？/);
   assert.equal(harness.interpreterCalls.length, 0);
   assert.equal(harness.requests.length, 0);
 
@@ -241,9 +238,10 @@ test("preflight sends the bounded current request once, even when the prompt exc
   const gate = harness.gateRequests[0];
   assert.ok(gate);
   assert.deepEqual(Object.keys(gate.state), ["task"]);
-  assert.ok(Array.from(gate.state.task).length <= 5000);
-  assert.match(gate.state.task, /^Current request: Fix /);
-  assert.ok(!gate.state.task.includes("a".repeat(6000)));
+  assert.equal(typeof gate.state.task, "string");
+  assert.ok(Array.from(String(gate.state.task)).length <= 5000);
+  assert.match(String(gate.state.task), /^Current request: Fix /);
+  assert.ok(!String(gate.state.task).includes("a".repeat(6000)));
 });
 
 test("Pi filters only the structured skill section, scans all hidden skills, and keeps native commands and model", async t => {
@@ -334,6 +332,26 @@ test("a mixed visible list keeps valid names, routes hidden skills, and warns fo
   assert.ok(!warnings[0]!.includes(harness.cwd));
 });
 
+test("Pi-configured TypeSafe authentication works without an environment key and status reports it", async t => {
+  const key = process.env.TYPESAFE_API_KEY;
+  delete process.env.TYPESAFE_API_KEY;
+  try {
+    const harness = await makeHarness(t, { skillCount: 3, visibleCount: 1 });
+    const result = await beforeAgentStart(harness, "Find implementation guidance");
+    assert.equal(result.messages.length, 1);
+    const command = harness.session.extensionRunner.getCommand("jev-skills");
+    assert.ok(command);
+    const ctx = harness.session.extensionRunner.createCommandContext();
+    const notifications: string[] = [];
+    await command.handler("status", { ...ctx, hasUI: true, ui: { ...ctx.ui, notify: message => notifications.push(message) } });
+    assert.match(notifications[0]!, /Classifier typesafe\/jev-latest: available \(Pi authentication\)/);
+    assert.ok(!notifications[0]!.includes("test-typesafe-key"));
+  } finally {
+    if (key === undefined) delete process.env.TYPESAFE_API_KEY;
+    else process.env.TYPESAFE_API_KEY = key;
+  }
+});
+
 test("on-demand tool searches Jev directly and returns the matching native skill body", async t => {
   const harness = await makeHarness(t, { autoRouting: false });
   await beforeAgentStart(harness, "");
@@ -341,7 +359,7 @@ test("on-demand tool searches Jev directly and returns the matching native skill
   assert.ok(tool);
   assert.match(tool.description, /specific unmet step/);
   assert.ok(tool.promptGuidelines?.some(guideline => guideline.includes("narrow unmet subtask")));
-  const result = await tool.execute("test-call", { task: "Improve keyboard accessibility of this React dashboard" } as never, undefined, undefined, harness.session.extensionRunner.createContext());
+  const result = await tool.execute("test-call", { task: "Improve keyboard accessibility of this React dashboard" } as never, undefined, undefined, harness.session.extensionRunner.createToolContext("test-call", undefined));
 
   assert.equal(harness.interpreterCalls.length, 0);
   assert.equal(harness.gateRequests.length, 0);
@@ -357,7 +375,7 @@ test("automatic routing degrades safely for missing Luna, missing TypeSafe crede
   assert.equal(fallback.messages[0]?.customType, "jev-skill-router");
   assert.equal(harness.interpreterCalls.length, 0);
 
-  const withNoClient = await makeHarness(t, { skillCount: 12, visibleCount: 1, withClient: false });
+  const withNoClient = await makeHarness(t, { skillCount: 12, visibleCount: 1, withClassifier: false });
   const apiKey = process.env.TYPESAFE_API_KEY;
   delete process.env.TYPESAFE_API_KEY;
   try {
@@ -366,7 +384,7 @@ test("automatic routing degrades safely for missing Luna, missing TypeSafe crede
     assert.equal(noAuth.messages.length, 0);
     const tool = withNoClient.session.getToolDefinition("jev_skill_search");
     assert.ok(tool);
-    const response = await tool.execute("missing-key", { task: "Search for guidance" } as never, undefined, undefined, withNoClient.session.extensionRunner.createContext());
+    const response = await tool.execute("missing-key", { task: "Search for guidance" } as never, undefined, undefined, withNoClient.session.extensionRunner.createToolContext("missing-key", undefined));
     assert.match(toolText(response), /authentication/);
     assert.equal((response.details as { errorCategory?: string }).errorCategory, "authentication");
   } finally {
@@ -394,7 +412,7 @@ test("native manual-only skills stay off the prompt and automatic scan but remai
 
   const tool = harness.session.getToolDefinition("jev_skill_search");
   assert.ok(tool);
-  const result = await tool.execute("manual-only", { task: "Search for accessibility guidance" } as never, undefined, undefined, harness.session.extensionRunner.createContext());
+  const result = await tool.execute("manual-only", { task: "Search for accessibility guidance" } as never, undefined, undefined, harness.session.extensionRunner.createToolContext("manual-only", undefined));
   assert.equal(Object.keys(harness.requests[1]!.questions).length, 11);
   assert.match(toolText(result), /Body for hidden-001: keyboard accessibility/);
 });
@@ -431,7 +449,7 @@ test("session replacement does not inherit supplied skills from another session"
   await beforeAgentStart(replacement, "");
   const tool = replacement.session.getToolDefinition("jev_skill_search");
   assert.ok(tool);
-  await tool.execute("replacement", { task: "Search for implementation guidance" } as never, undefined, undefined, replacement.session.extensionRunner.createContext());
+  await tool.execute("replacement", { task: "Search for implementation guidance" } as never, undefined, undefined, replacement.session.extensionRunner.createToolContext("replacement", undefined));
   assert.equal(Object.keys(replacement.requests[0]!.questions).length, 11);
 });
 
@@ -480,7 +498,7 @@ test("cancelled on-demand searches return normally without calling Jev", async t
   assert.ok(tool);
   const controller = new AbortController();
   controller.abort();
-  const result = await tool.execute("cancelled", { task: "Search for skills" } as never, controller.signal, undefined, harness.session.extensionRunner.createContext());
+  const result = await tool.execute("cancelled", { task: "Search for skills" } as never, controller.signal, undefined, harness.session.extensionRunner.createToolContext("cancelled", controller.signal));
   assert.equal(harness.requests.length, 0);
   assert.match(toolText(result), /could not complete \(cancelled\)/);
 });
