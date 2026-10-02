@@ -1,13 +1,12 @@
 import { homedir } from "node:os";
 import { basename } from "node:path";
-import { AuthenticationError, TypeSafeClient } from "@typesafe-ai/sdk";
 import { Type } from "typebox";
 import { formatSkillsForPrompt, type Skill } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { loadConfig } from "../src/config.js";
 import { collectInterpretationContext } from "../src/context.js";
 import { interpretTask } from "../src/interpreter.js";
-import { adaptTypeSafeClient, classifySkills, preflightSkills, type JevClientLike } from "../src/jev.js";
+import { classifySkills, preflightSkills } from "../src/jev.js";
 import { filterVisible, captureRegistry, resolveVisibleSkills, type SkillRecord } from "../src/registry.js";
 import { createRouter, type RouteDetails, type RouteResult, type RouterOptions } from "../src/router.js";
 import { reconstructSuppliedSkills } from "../src/state.js";
@@ -16,7 +15,6 @@ import type { SessionOverrides } from "../src/types.js";
 
 export interface JevSkillRouterOptions {
   homeDir?: string;
-  jevClient?: JevClientLike;
 }
 
 type Router = ReturnType<typeof createRouter>;
@@ -40,19 +38,22 @@ function isSubstantive(text: string): boolean {
   return text.trim().length > 0;
 }
 
-function statusText(
+async function statusText(
   ctx: ExtensionContext,
   config: Awaited<ReturnType<typeof loadConfig>>["config"],
   routingConfigured: boolean,
   registry: ReadonlyMap<string, SkillRecord> | undefined,
   lastRoute: RouteDetails | undefined
-): string {
+): Promise<string> {
   let lunaAvailable = false;
+  let jevAvailable = false;
   try {
     const slash = config.interpreterModel.indexOf("/");
     const provider = config.interpreterModel.slice(0, slash);
     const modelId = config.interpreterModel.slice(slash + 1);
     lunaAvailable = ctx.modelRegistry.getAvailable().some(model => model.provider === provider && model.id === modelId);
+    const classifiers = await ctx.modelRegistry.getAvailableOfType("classifier", "typesafe");
+    jevAvailable = classifiers.some(model => model.id === config.jevModel);
   } catch {
     // Provider state can be unavailable during session startup.
   }
@@ -69,7 +70,7 @@ function statusText(
     `Routing configured: ${routingConfigured && !visibility?.fallbackToNative ? "yes" : "no"}; enabled: ${config.enabled ? "yes" : "no"}; automatic: ${config.autoRouting ? "on" : "off"}`,
     `Visibility: ${visibility?.fallbackToNative ? "unknown names; native catalog retained" : visibility?.unknownNames.length ? `${visibility.unknownNames.length} unknown names ignored` : "valid"}`,
     `Skills: ${skills.length} discovered, ${visibleCount} visible, ${advertisable.length - visibleCount} hidden, ${skills.length - advertisable.length} manual-only`,
-    `Interpreter ${config.interpreterModel}: ${lunaAvailable ? "available" : "unavailable"}; TypeSafe key: ${process.env.TYPESAFE_API_KEY?.trim() ? "present" : "missing"}`,
+    `Interpreter ${config.interpreterModel}: ${lunaAvailable ? "available" : "unavailable"}; Classifier typesafe/${config.jevModel}: ${jevAvailable ? "available" : "unavailable"} (Pi authentication)`,
     `Last route: ${lastRoute ? `${lastRoute.routeKind}, ${lastRoute.evaluatedCount}/${lastRoute.candidateCount} evaluated, ${lastRoute.coverage}, selected ${lastRoute.selected.map(item => item.name).join(", ") || "none"}${lastRoute.skipReason ? `, skipped ${lastRoute.skipReason}` : ""}${lastRoute.errorCategory ? `, error ${lastRoute.errorCategory}` : ""}` : "none"}`
   ].join("\n");
 }
@@ -96,7 +97,6 @@ export function registerJevSkillRouter(pi: ExtensionAPI, options: JevSkillRouter
   let registry: Map<string, SkillRecord> | undefined;
   let lastRoute: RouteDetails | undefined;
   let lastRouter: Router | undefined;
-  let sdkClient: JevClientLike | undefined;
   let lastVisibleWarningSignature: string | undefined;
 
   const warnUnknownVisibleSkills = (ctx: ExtensionContext, unknownNames: readonly string[]): void => {
@@ -128,25 +128,14 @@ export function registerJevSkillRouter(pi: ExtensionAPI, options: JevSkillRouter
     return result;
   };
 
-  const getJevClient = (): JevClientLike => {
-    if (options.jevClient) return options.jevClient;
-    const apiKey = process.env.TYPESAFE_API_KEY?.trim();
-    if (!apiKey) throw new AuthenticationError(401, { error: "TYPESAFE_API_KEY is not configured" }, new Headers(), "TYPESAFE_API_KEY is not configured");
-    sdkClient ??= adaptTypeSafeClient(new TypeSafeClient({ apiKey }));
-    return sdkClient;
-  };
-
   const getRouter = (ctx: ExtensionContext): Router => {
     const key = ctx.modelRegistry as object;
     let router = routers.get(key);
     if (!router) {
       const dependencies: RouterOptions = {
         preflight: input => {
-          if (!options.jevClient && !process.env.TYPESAFE_API_KEY?.trim()) {
-            return Promise.resolve({ needed: false, usage: {}, requests: 0, latencyMs: 0, errorCategory: "authentication" });
-          }
           return preflightSkills({
-            client: getJevClient(),
+            registry: ctx.modelRegistry,
             context: input.context,
             model: input.config.jevModel,
             timeoutMs: input.config.jevTimeoutMs,
@@ -161,22 +150,8 @@ export function registerJevSkillRouter(pi: ExtensionAPI, options: JevSkillRouter
           ...(input.signal === undefined ? {} : { signal: input.signal })
         }),
         classifier: input => {
-          if (!options.jevClient && !process.env.TYPESAFE_API_KEY?.trim()) {
-            return Promise.resolve({
-              scores: [],
-              selected: [],
-              coverage: "none",
-              candidateCount: input.skills.length,
-              evaluatedCount: 0,
-              invalidAnswers: 0,
-              usage: {},
-              requests: 0,
-              latencyMs: 0,
-              errorCategory: "authentication"
-            });
-          }
           return classifySkills({
-            client: getJevClient(),
+            registry: ctx.modelRegistry,
             task: input.task,
             skills: input.skills,
             threshold: input.config.threshold,
@@ -310,7 +285,7 @@ export function registerJevSkillRouter(pi: ExtensionAPI, options: JevSkillRouter
         message = `Debug ${rest[0] === "on" ? "enabled" : "disabled"} for this session.`;
       } else if (action === "status" && rest.length === 0) {
         const effective = await loadEffectiveConfig(ctx);
-        message = statusText(ctx, effective.config, effective.routingConfigured, registry, lastRoute);
+        message = await statusText(ctx, effective.config, effective.routingConfigured, registry, lastRoute);
       } else if (action === "stats" && rest.length === 0) {
         message = lastRouter?.metrics.formatStats() ?? "No router metrics are available yet.";
       } else if (action === "test" && task) {

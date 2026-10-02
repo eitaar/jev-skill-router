@@ -1,6 +1,6 @@
-import { createAssistantMessageEventStream, type Api, type AssistantMessage, type Context, type Model, type SimpleStreamOptions, type Usage } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, type Api, type AssistantMessage, type ClassifierApi, type ClassifierContext, type ClassifierModel, type ClassifierResult, type Context, type Model, type ModelsClassifierOptions, type SimpleStreamOptions, type Usage } from "@earendil-works/pi-ai";
 import type { Skill } from "@earendil-works/pi-coding-agent";
-import type { JevClientLike, JevRequest, JevRequestOptions } from "../src/jev.js";
+import type { JevRegistry } from "../src/jev.js";
 import type { SkillRecord } from "../src/registry.js";
 import { DEFAULT_CONFIG } from "../src/config.js";
 import type { RouterConfig } from "../src/types.js";
@@ -54,17 +54,32 @@ export function fakeInterpreterRegistry(responses: readonly AssistantMessage[]) 
   };
 }
 
-export function fakeJev(handler: (request: JevRequest, call: number, options?: JevRequestOptions) => unknown | Promise<unknown>) {
-  const requests: JevRequest[] = [];
-  const calls: Array<{ request: JevRequest; options?: JevRequestOptions }> = [];
-  const client: JevClientLike = {
-    async systemOne(request, options) {
+export const jevModel: ClassifierModel<ClassifierApi> = {
+  type: "classifier", id: "jev-latest", name: "Jev", provider: "typesafe", api: "typesafe-system-one",
+  baseUrl: "https://example.invalid", input: ["text"], contextWindow: 32_000,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+};
+
+export function fakeUsage(input: number, output: number): Usage {
+  return { input, output, cacheRead: 0, cacheWrite: 0, totalTokens: input + output, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+}
+
+export function fakeClassification(result: Partial<ClassifierResult> = {}): ClassifierResult {
+  return { api: jevModel.api, provider: jevModel.provider, model: jevModel.id, answers: {}, stopReason: "stop", timestamp: 0, ...result };
+}
+
+export function fakeJev(handler: (request: ClassifierContext, call: number, options?: ModelsClassifierOptions) => Partial<ClassifierResult> | Promise<Partial<ClassifierResult>>) {
+  const requests: ClassifierContext[] = [];
+  const calls: Array<{ model: ClassifierModel<ClassifierApi>; request: ClassifierContext; options?: ModelsClassifierOptions }> = [];
+  const registry: JevRegistry = {
+    findOfType: (_type, provider, id) => provider === jevModel.provider && id === jevModel.id ? jevModel : undefined,
+    async classify(model, request, options) {
       requests.push(request);
-      calls.push({ request, ...(options === undefined ? {} : { options }) });
-      return handler(request, requests.length - 1, options);
+      calls.push({ model, request, ...(options === undefined ? {} : { options }) });
+      return fakeClassification(await handler(request, requests.length - 1, options));
     }
   };
-  return { ...client, requests, calls };
+  return { ...registry, requests, calls };
 }
 
 export function makeSkillRecords(names: readonly string[]): SkillRecord[] {

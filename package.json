@@ -4,6 +4,9 @@
   "type": "module",
   "private": true,
   "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "keywords": [
     "pi-package",
     "pi-extension",
@@ -24,17 +27,14 @@
     "test:unit": "node --test --import tsx test/config.test.ts test/registry-context-state.test.ts test/interpreter.test.ts test/jev.test.ts test/loader-router.test.ts test/extension.integration.test.ts",
     "smoke": "node --test --import tsx test/live-smoke.test.ts"
   },
-  "dependencies": {
-    "@typesafe-ai/sdk": "^0.6.0"
-  },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": ">=1.0.0",
+    "@earendil-works/pi-coding-agent": ">=1.0.0",
     "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.87.1",
-    "@earendil-works/pi-coding-agent": "0.87.1",
+    "@earendil-works/pi-ai": "1.0.0",
+    "@earendil-works/pi-coding-agent": "1.0.0",
     "@types/node": "^24.0.0",
     "tsx": "^4.20.0",
     "typebox": "^1.3.0",
